@@ -16,10 +16,11 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_access_token(user_id: str, email: str, role: str, tenant_id: str = None) -> str:
+def create_access_token(user_id: str, email: str, role: str, tenant_id: str = None, warehouse_id: str = None) -> str:
     payload = {
         'sub': user_id, 'email': email, 'role': role,
         'tenant_id': tenant_id or '',
+        'warehouse_id': warehouse_id or '',
         'type': 'access',
         'exp': datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE)
     }

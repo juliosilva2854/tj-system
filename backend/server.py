@@ -86,7 +86,7 @@ async def login(request: Request, creds: UserLogin):
         raise HTTPException(status_code=401, detail="Email ou senha incorretos")
     if not doc.get('active', True):
         raise HTTPException(status_code=403, detail="Conta inativa")
-    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''))
+    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''), doc.get('warehouse_id', ''))
     refresh = create_refresh_token(doc['id'])
     user_out = {k: doc[k] for k in ['id', 'email', 'name', 'role', 'tenant_id', 'warehouse_id', 'active', 'created_at'] if k in doc}
     return {"access_token": access, "refresh_token": refresh, "user": user_out}
@@ -103,8 +103,27 @@ async def refresh_token(request: Request):
     doc = await db.users.find_one({"id": payload['sub']}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=401, detail="Usuario nao encontrado")
-    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''))
+    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''), doc.get('warehouse_id', ''))
     return {"access_token": access}
+
+@api.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"id": user['sub']}, {"_id": 0, "password_hash": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    tenant_name = ""
+    warehouse_name = ""
+    if doc.get('tenant_id'):
+        t = await db.tenants.find_one({"id": doc['tenant_id']}, {"_id": 0})
+        if t:
+            tenant_name = t['name']
+    if doc.get('warehouse_id'):
+        w = await db.warehouses.find_one({"id": doc['warehouse_id']}, {"_id": 0})
+        if w:
+            warehouse_name = w['name']
+    doc['tenant_name'] = tenant_name
+    doc['warehouse_name'] = warehouse_name
+    return doc
 
 @api.post("/auth/register")
 async def register(data: UserCreate, user: dict = Depends(require_roles("master", "admin"))):
@@ -112,6 +131,21 @@ async def register(data: UserCreate, user: dict = Depends(require_roles("master"
         raise HTTPException(status_code=403, detail="Admin nao pode criar master")
     if user['role'] == 'admin':
         data.tenant_id = user.get('tenant_id')
+    if data.role == 'master':
+        data.tenant_id = ''
+        data.warehouse_id = ''
+    else:
+        if not data.tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id obrigatorio para esta role")
+        t = await db.tenants.find_one({"id": data.tenant_id}, {"_id": 0})
+        if not t:
+            raise HTTPException(status_code=404, detail="Estabelecimento nao encontrado")
+        if data.role == 'operacional' and not data.warehouse_id:
+            raise HTTPException(status_code=400, detail="Operacional precisa de deposito vinculado")
+        if data.warehouse_id:
+            w = await db.warehouses.find_one({"id": data.warehouse_id, "tenant_id": data.tenant_id}, {"_id": 0})
+            if not w:
+                raise HTTPException(status_code=404, detail="Deposito nao encontrado neste estabelecimento")
     existing = await db.users.find_one({"email": data.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email ja cadastrado")
@@ -121,7 +155,7 @@ async def register(data: UserCreate, user: dict = Depends(require_roles("master"
         "tenant_id": data.tenant_id or "", "warehouse_id": data.warehouse_id or "",
         "password_hash": hash_password(data.password), "active": True, "created_at": now
     }
-    await db.users.insert_one(doc)
+    await db.users.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "usuario", doc['id'], doc.get('tenant_id', ''))
     doc.pop('password_hash')
     return doc
@@ -137,7 +171,7 @@ async def create_tenant(data: TenantCreate, user: dict = Depends(require_roles("
         raise HTTPException(status_code=400, detail="Slug ja em uso")
     now = datetime.now(timezone.utc).isoformat()
     doc = {"id": gen_id(), "name": data.name, "slug": data.slug, "active": True, "created_at": now}
-    await db.tenants.insert_one(doc)
+    await db.tenants.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "tenant", doc['id'])
     return doc
 
@@ -188,11 +222,18 @@ async def delete_user(uid: str, user: dict = Depends(require_roles("master"))):
 # ═══════════════════════════════════════════════
 
 @api.post("/warehouses")
-async def create_warehouse(data: WarehouseCreate, user: dict = Depends(require_roles("master", "admin"))):
+async def create_warehouse(data: WarehouseCreate, user: dict = Depends(require_roles("admin", "logistica"))):
     tid = user.get('tenant_id', '')
-    if user['role'] == 'master' and not tid:
-        body = data.model_dump()
-        tid = body.get('tenant_id', '')
+    if not tid:
+        raise HTTPException(status_code=400, detail="Usuario sem estabelecimento vinculado")
+    if data.type == "filho" and not data.parent_id:
+        raise HTTPException(status_code=400, detail="Deposito FILHO precisa de um Deposito PAI vinculado")
+    if data.parent_id:
+        parent = await db.warehouses.find_one({"id": data.parent_id, "tenant_id": tid}, {"_id": 0})
+        if not parent:
+            raise HTTPException(status_code=404, detail="Deposito PAI nao encontrado")
+        if parent.get('type') != 'pai':
+            raise HTTPException(status_code=400, detail="O deposito vinculado precisa ser do tipo PAI")
     now = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": gen_id(), "tenant_id": tid, "name": data.name, "location": data.location,
@@ -200,7 +241,7 @@ async def create_warehouse(data: WarehouseCreate, user: dict = Depends(require_r
         "parent_id": data.parent_id or "", "sectors": data.sectors,
         "active": True, "created_at": now, "created_by": user['sub']
     }
-    await db.warehouses.insert_one(doc)
+    await db.warehouses.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "deposito", doc['id'], tid)
     return doc
 
@@ -250,7 +291,7 @@ async def create_product(data: ProductCreate, user: dict = Depends(get_current_u
         "id": gen_id(), "tenant_id": tid, **data.model_dump(),
         "available_qty": 0, "active": True, "created_at": now, "created_by": user['sub']
     }
-    await db.products.insert_one(doc)
+    await db.products.insert_one(doc); doc.pop("_id", None)
     return doc
 
 @api.get("/products")
@@ -378,7 +419,7 @@ async def create_requisition(data: RequisitionCreate, user: dict = Depends(get_c
         "items": [i.model_dump() for i in data.items], "notes": data.notes or "",
         "status": "pending", "created_at": now, "created_by": user['sub']
     }
-    await db.requisitions.insert_one(doc)
+    await db.requisitions.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "requisicao", doc['id'], tid)
     return doc
 
@@ -446,7 +487,7 @@ async def create_supplier(data: SupplierCreate, user: dict = Depends(get_current
     tid = user.get('tenant_id', '')
     now = datetime.now(timezone.utc).isoformat()
     doc = {"id": gen_id(), "tenant_id": tid, **data.model_dump(), "active": True, "created_at": now, "created_by": user['sub']}
-    await db.suppliers.insert_one(doc)
+    await db.suppliers.insert_one(doc); doc.pop("_id", None)
     return doc
 
 @api.get("/suppliers")
@@ -492,7 +533,7 @@ async def create_invoice(data: InvoiceCreate, user: dict = Depends(get_current_u
         "items": [i.model_dump() for i in data.items],
         "status": "pending", "type": "entrada", "created_at": now, "created_by": user['sub']
     }
-    await db.invoices.insert_one(doc)
+    await db.invoices.insert_one(doc); doc.pop("_id", None)
     return doc
 
 @api.get("/invoices")
@@ -610,7 +651,7 @@ async def create_sale(data: SaleCreate, user: dict = Depends(get_current_user)):
         "payment_method": data.payment_method or "", "status": "completed",
         "created_at": now, "created_by": user['sub']
     }
-    await db.sales.insert_one(doc)
+    await db.sales.insert_one(doc); doc.pop("_id", None)
     for item in data.items:
         inv = await db.inventory.find_one({"product_id": item.product_id, "warehouse_id": data.warehouse_id}, {"_id": 0})
         if inv:
@@ -815,20 +856,59 @@ async def read_all(user: dict = Depends(get_current_user)):
 
 @api.post("/seed")
 async def seed():
-    existing = await db.users.find_one({"email": "admin@gestaotj.com"}, {"_id": 0})
+    # Detect old single-tenant schema (role="dev"/"usuario") and clear if present
+    old = await db.users.find_one({"role": {"$in": ["dev", "usuario"]}}, {"_id": 0})
+    if old:
+        await db.users.delete_many({})
+        await db.tenants.delete_many({})
+        await db.warehouses.delete_many({})
+        await db.products.delete_many({})
+        await db.inventory.delete_many({})
+        await db.suppliers.delete_many({})
+        await db.invoices.delete_many({})
+        await db.requisitions.delete_many({})
+        await db.sales.delete_many({})
+        await db.audit_logs.delete_many({})
+        await db.notifications.delete_many({})
+
+    existing = await db.users.find_one({"email": "master@sconnecta.com.br"}, {"_id": 0})
     if existing:
         return {"message": "Ja inicializado"}
+
     now = datetime.now(timezone.utc).isoformat()
-    tenant = {"id": gen_id(), "name": "TJ Principal", "slug": "tj", "active": True, "created_at": now}
+    tenant_id = gen_id()
+    tenant = {"id": tenant_id, "name": "Unidade TJ", "slug": "tj", "active": True, "created_at": now}
     await db.tenants.insert_one(tenant)
+
+    # PAI (Almoxarifado Central) e FILHO (Setor Operacional)
+    pai_id = gen_id()
+    filho_id = gen_id()
+    pai = {"id": pai_id, "tenant_id": tenant_id, "name": "Almoxarifado Central", "location": "Sede", "description": "Estoque PAI - recebe Notas Fiscais",
+           "type": "pai", "parent_id": "", "sectors": ["Geral"], "active": True, "created_at": now, "created_by": "seed"}
+    filho = {"id": filho_id, "tenant_id": tenant_id, "name": "Setor Operacional A", "location": "Unidade Operacional", "description": "Estoque FILHO - consome via requisicoes",
+             "type": "filho", "parent_id": pai_id, "sectors": ["Atendimento", "Producao"], "active": True, "created_at": now, "created_by": "seed"}
+    await db.warehouses.insert_many([pai, filho])
+
     users = [
-        {"id": gen_id(), "email": "admin@gestaotj.com", "name": "Administrador", "role": "master", "tenant_id": "", "warehouse_id": "", "password_hash": hash_password("Admin@123456"), "active": True, "created_at": now},
-        {"id": gen_id(), "email": "gerente@gestaotj.com", "name": "Gerente", "role": "admin", "tenant_id": tenant['id'], "warehouse_id": "", "password_hash": hash_password("Gerente@123"), "active": True, "created_at": now},
-        {"id": gen_id(), "email": "usuario@gestaotj.com", "name": "Usuario", "role": "logistica", "tenant_id": tenant['id'], "warehouse_id": "", "password_hash": hash_password("Usuario@123"), "active": True, "created_at": now},
+        {"id": gen_id(), "email": "master@sconnecta.com.br", "name": "Master Global", "role": "master",
+         "tenant_id": "", "warehouse_id": "", "password_hash": hash_password("Master@2026"),
+         "active": True, "created_at": now},
+        {"id": gen_id(), "email": "admin@tj.sconnecta.com.br", "name": "Admin TJ", "role": "admin",
+         "tenant_id": tenant_id, "warehouse_id": "", "password_hash": hash_password("Admin@2026"),
+         "active": True, "created_at": now},
+        {"id": gen_id(), "email": "logistica@tj.sconnecta.com.br", "name": "Logistica PAI", "role": "logistica",
+         "tenant_id": tenant_id, "warehouse_id": pai_id, "password_hash": hash_password("Logistica@2026"),
+         "active": True, "created_at": now},
+        {"id": gen_id(), "email": "operacional@tj.sconnecta.com.br", "name": "Operacional FILHO", "role": "operacional",
+         "tenant_id": tenant_id, "warehouse_id": filho_id, "password_hash": hash_password("Operacional@2026"),
+         "active": True, "created_at": now},
     ]
     await db.users.insert_many(users)
-    await db.users.create_index("email", unique=True)
-    return {"message": "Sistema inicializado", "tenant_id": tenant['id']}
+    try:
+        await db.users.create_index("email", unique=True)
+    except Exception:
+        pass
+    return {"message": "Sistema inicializado", "tenant_id": tenant_id, "pai_warehouse_id": pai_id, "filho_warehouse_id": filho_id}
 
 # ═══════════════════════════════════════════════
 # APP SETUP

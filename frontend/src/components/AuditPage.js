@@ -6,9 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Download, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
-const actionPT = { CREATE: 'Criar', UPDATE: 'Atualizar', DELETE: 'Excluir', TRANSFER: 'Transferir', ADJUST: 'Ajustar', PROCESS: 'Processar', CONVERT: 'Converter' };
-const entityPT = { user: 'Usuario', product: 'Produto', warehouse: 'Armazem', supplier: 'Fornecedor', invoice: 'Fatura', sale: 'Venda', order: 'Pedido', inventory: 'Inventario', alert_config: 'Alerta' };
-const actionColors = { CREATE: 'bg-green-100 text-green-700', UPDATE: 'bg-blue-100 text-blue-700', DELETE: 'bg-red-100 text-red-700', ADJUST: 'bg-yellow-100 text-yellow-700', TRANSFER: 'bg-purple-100 text-purple-700', PROCESS: 'bg-cyan-100 text-cyan-700', CONVERT: 'bg-indigo-100 text-indigo-700' };
+const actionPT = { CRIAR: 'Criar', EDITAR: 'Editar', EXCLUIR: 'Excluir', TRANSFERIR: 'Transferir', AJUSTAR: 'Ajustar', PROCESSAR: 'Processar', APROVAR: 'Aprovar', REJEITAR: 'Rejeitar', CREATE: 'Criar', UPDATE: 'Atualizar', DELETE: 'Excluir' };
+const entityPT = { usuario: 'Usuario', produto: 'Produto', deposito: 'Deposito', fornecedor: 'Fornecedor', nota_fiscal: 'Nota Fiscal', venda: 'Venda', requisicao: 'Requisicao', estoque: 'Estoque', tenant: 'Estabelecimento', user: 'Usuario', product: 'Produto', warehouse: 'Deposito' };
+const actionColors = { CRIAR: 'bg-green-100 text-green-700', EDITAR: 'bg-blue-100 text-blue-700', EXCLUIR: 'bg-red-100 text-red-700', AJUSTAR: 'bg-yellow-100 text-yellow-700', TRANSFERIR: 'bg-purple-100 text-purple-700', PROCESSAR: 'bg-cyan-100 text-cyan-700', APROVAR: 'bg-emerald-100 text-emerald-700', REJEITAR: 'bg-rose-100 text-rose-700' };
 
 const formatDetails = (changes) => {
   if (!changes || Object.keys(changes).length === 0) return '-';

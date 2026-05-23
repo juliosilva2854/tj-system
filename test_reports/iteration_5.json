@@ -1,0 +1,43 @@
+{
+  "summary": "Comprehensive backend testing of Gestao TJ SaaS multi-tenant refactor via public URL. Created /app/backend/tests/test_multitenant_saas.py (32 pytest tests). All 32 tests PASSED covering auth, RBAC, multi-tenant IDOR, warehouses PAI/FILHO, requisition flow (debit PAI, credit FILHO), suppliers, invoices, dashboard, reports, audit logs PT, Pydantic validation/sanitization.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/inventory/adjust", "issue": "No tenant_id verification on existing inventory doc; relies on user JWT tenant for new inserts. A logistica user could potentially mutate an inventory record from another tenant if they discovered the product_id+warehouse_id pair. Recommend adding verify_tenant_access against the found inventory doc."},
+      {"endpoint": "POST /api/products", "issue": "Any authenticated user (including operacional) can create products. If intended only for admin/logistica, add require_roles."},
+      {"endpoint": "POST /api/invoices, /api/invoices/{id}/process-items", "issue": "Open to all roles; operacional can create/process invoices. Consider restricting to admin/logistica."},
+      {"endpoint": "POST /api/auth/register", "issue": "When admin creates a 'master' user the code raises 403 only for admin->master. Master can still create master users globally - acceptable but worth documenting."},
+      {"endpoint": "POST /api/seed", "issue": "Endpoint is unauthenticated and idempotent (returns 'Ja inicializado') - safe in current behavior, but consider protecting in production deploys."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_multitenant_saas.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Add tenant_id check inside /api/inventory/adjust before mutating existing inventory rows to harden IDOR.",
+    "(Optional) Restrict /api/products POST and /api/invoices endpoints with require_roles('admin','logistica','master') if business rule requires it.",
+    "Run frontend integration testing in a follow-up session (this iteration was backend-only as requested)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~929 lines and approaching the 700-line threshold - consider splitting into routers per domain (auth.py, tenants.py, warehouses.py, requisitions.py, invoices.py) for maintainability.",
+    "Duplicated Gemini OCR code in /invoices/ocr and /invoices/upload - extract into a shared helper.",
+    "/api/inventory/adjust accepts product_id/warehouse_id as query params (POST with body=None) - inconsistent with rest of API that uses JSON bodies. Also no validation that quantity is numeric.",
+    "transfer_product uses query params too - same inconsistency. Consider migrating to Pydantic body models.",
+    "list_inventory issues N+1 queries (per inventory row fetches product+warehouse). Use $lookup or batch fetches for large datasets.",
+    "Audit logger silently skips master-created entities when tenant_id is empty - acceptable but document.",
+    "All Pydantic models properly use ConfigDict(extra='ignore'); sanitize_str strips <>{} consistently - good.",
+    "JWT contains warehouse_id correctly (bug fix from this session verified)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_multitenant_saas.py (new)"
+  ],
+  "success_rate": {"backend": "100% (32/32)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md exactly: master@sconnecta.com.br/Master@2026, admin@tj.sconnecta.com.br/Admin@2026, logistica@tj.sconnecta.com.br/Logistica@2026, operacional@tj.sconnecta.com.br/Operacional@2026. Second tenant 'acme...' created on the fly via master for IDOR isolation tests.",
+  "seed_data_creation": "Created via POST /api/seed (idempotent). Second tenant + admin (TEST_ACME) created for isolation tests; not cleaned up (master can delete via /api/users/{uid} and tenants persist).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is solid - 32/32 pytest pass against external URL. Use /app/backend/tests/test_multitenant_saas.py as regression suite. Rate limit (10/min) on /auth/login is enforced and handled in helper. Gemini OCR endpoints (/invoices/ocr, /invoices/upload) were NOT exercised with real files - if needed, supply real PDF/JPG sample. Next: frontend testing (login flows, RBAC visibility per role, requisition UI from operacional, approval UI from logistica).",
+  "rca of the issue": "Only one test initially failed (test_operacional_requires_warehouse) - root cause was a test bug (name='x' violating Pydantic min_length=2 producing 422 before reaching backend's 400 check). Fixed by using a valid name. No backend bug."
+}

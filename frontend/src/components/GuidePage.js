@@ -1,101 +1,109 @@
 import React from 'react';
-import { Home, Package, Warehouse, ClipboardList, UserCircle, FileText, BarChart3, Bell, TrendingUp, Users } from 'lucide-react';
+import { Home, Package, Warehouse, ClipboardList, UserCircle, FileText, BarChart3, Bell, TrendingUp, Users, ArrowLeftRight, Building2, ShieldCheck } from 'lucide-react';
 
 const sections = [
   {
+    icon: ShieldCheck, title: 'Arquitetura SaaS Multi-Tenant',
+    items: [
+      'O sistema isola dados por "estabelecimento" (tenant). Cada usuario so ve dados do seu proprio estabelecimento.',
+      'Master Global (subdominio master.*): cria estabelecimentos e gerencia usuarios em toda a plataforma.',
+      'Administrador, Logistica e Operacional (subdominio do seu tenant): operam o estoque do estabelecimento.',
+      'Cada estabelecimento tem um Almoxarifado Central (PAI) e um ou mais Setores Operacionais (FILHO).',
+    ]
+  },
+  {
+    icon: Building2, title: 'Estabelecimentos (Master)',
+    items: [
+      'Apenas Master pode criar estabelecimentos.',
+      'Cada estabelecimento tem um Slug unico (ex: tj) que vira subdominio (tj.sconnecta.com.br).',
+      'Apos criar, o Master cria um usuario Administrador para o estabelecimento.',
+    ]
+  },
+  {
     icon: Home, title: 'Dashboard',
     items: [
-      'Ao acessar o sistema, voce vera o painel principal com as informacoes resumidas.',
-      'Os cards mostram: total de produtos cadastrados, fornecedores, depositos, notas fiscais pendentes e alertas de estoque.',
-      'Se houver produtos com estoque abaixo do minimo configurado, eles aparecerao na secao de alertas vermelhos.',
+      'Cards com os indicadores principais do estabelecimento.',
+      'Produtos, Fornecedores, Depositos, NFs Pendentes, Requisicoes Pendentes e Alertas de Estoque Baixo.',
+      'Usuarios Operacionais veem apenas dados do seu deposito FILHO.',
+    ]
+  },
+  {
+    icon: Warehouse, title: 'Depositos (PAI / FILHO)',
+    items: [
+      'PAI (Almoxarifado Central): recebe as Notas Fiscais e aprova requisicoes.',
+      'FILHO (Setor Operacional): consome estoque criando Requisicoes para o PAI.',
+      'Ao criar um FILHO, voce escolhe o PAI ao qual ele esta vinculado.',
+      'Setores ajudam a organizar internamente cada deposito (ex: Prateleira A, Geladeira).',
+    ]
+  },
+  {
+    icon: ArrowLeftRight, title: 'Requisicoes (FILHO -> PAI)',
+    items: [
+      'Operacional (do FILHO) cria uma requisicao selecionando produtos disponiveis no PAI.',
+      'Logistica/Admin (do PAI) revisa e Aprova ou Rejeita.',
+      'Ao Aprovar: o sistema debita do estoque do PAI e credita no estoque do FILHO automaticamente.',
+      'Se rejeitada, o estoque nao se move.',
     ]
   },
   {
     icon: Package, title: 'Produtos',
     items: [
-      'Nesta aba ficam os produtos importados das notas fiscais que ainda nao foram enviados para um deposito.',
-      'Cada produto mostra o SKU, nome, custo unitario e quantidade disponivel para transferencia.',
-      'Clique no botao "Transferir" para enviar o produto para um deposito especifico.',
-      'Ao transferir, selecione o deposito e o setor de destino, e informe a quantidade.',
-      'Quando toda a quantidade for transferida, o produto desaparece desta aba e fica apenas no Estoque.',
-      'Se transferir parcialmente, o restante continua aqui ate ser enviado.',
-    ]
-  },
-  {
-    icon: Warehouse, title: 'Depositos',
-    items: [
-      'Cadastre os locais fisicos onde seus produtos ficam armazenados.',
-      'Cada deposito pode ter "Setores" - areas internas para organizar melhor (ex: Prateleira A, Geladeira, Corredor 3).',
-      'Para adicionar setores, digite o nome e clique "Adicionar" ao criar ou editar o deposito.',
-      'Voce pode ativar ou desativar depositos clicando no botao de status.',
-      'Importante: cadastre os setores antes de fazer baixas no estoque, pois a baixa exige selecionar o setor.',
+      'Lista produtos importados das notas fiscais ainda nao alocados a um deposito.',
+      'Clique em "Transferir" para envia-los ao PAI (almoxarifado central).',
     ]
   },
   {
     icon: ClipboardList, title: 'Estoque',
     items: [
-      'Aqui voce ve todos os produtos que estao nos depositos, com a quantidade atual.',
-      'A coluna "Status" indica se o produto esta OK (verde) ou Baixo (vermelho) baseado no estoque minimo configurado nos Alertas.',
-      'Use o botao "Baixa" para retirar unidades do estoque - voce deve selecionar o setor do deposito para onde o produto esta indo.',
-      'A quantidade nunca fica negativa. Se tentar dar baixa de mais do que tem, o sistema zera o estoque.',
-      'O produto continua cadastrado mesmo apos a baixa total - apenas a quantidade e reduzida.',
+      'Mostra produtos em cada deposito com a quantidade atual e status (OK / Baixo).',
+      'Operacional ve apenas o estoque do seu deposito FILHO.',
+      'Faca baixa do estoque escolhendo o setor de destino.',
     ]
   },
   {
     icon: UserCircle, title: 'Fornecedores',
     items: [
-      'Cadastre todos os seus fornecedores com nome, CNPJ, email, telefone e endereco.',
-      'Use a busca para encontrar rapidamente por nome ou CNPJ.',
-      'Voce pode editar e excluir fornecedores a qualquer momento.',
+      'Cadastre fornecedores com CNPJ, contato, email e telefone.',
+      'Cada estabelecimento ve apenas seus proprios fornecedores.',
     ]
   },
   {
     icon: FileText, title: 'Notas Fiscais',
     items: [
-      'Esta e a aba principal para entrada de mercadorias no sistema.',
-      'Clique em "Nova Nota Fiscal" e escolha como importar:',
-      '  - PDF/XML: Faca upload de um arquivo. XML (NFe) e lido automaticamente. PDF e processado com inteligencia artificial.',
-      '  - OCR: Tire uma foto ou escaneie a nota e faca upload. A IA extrai os dados automaticamente.',
-      '  - Revisar: Confira os dados extraidos antes de salvar.',
-      'Apos salvar a nota, clique no icone de caixa para enviar os itens para a aba "Produtos".',
-      'De la, voce transfere cada produto para o deposito correto.',
+      'Upload PDF/XML/imagem. XML e lido nativamente; PDF e imagem usam Gemini AI para extracao.',
+      'Revise os dados extraidos e salve a nota.',
+      'Apos salvar, clique no icone Caixa para enviar os itens para a aba "Produtos".',
     ]
   },
   {
     icon: BarChart3, title: 'Relatorios',
     items: [
-      'DRE: Demonstrativo de Resultados mostrando receita, custo, lucro bruto e margem de lucro.',
-      'Curva ABC: Classificacao dos produtos por faturamento. Classe A (80%), B (15%) e C (5%).',
-      'Giro de Estoque: Mostra a rotatividade de cada produto, estoque atual, taxa de giro e dias de cobertura.',
-      'Use os botoes PDF e Excel para exportar os relatorios.',
+      'DRE, Curva ABC e Giro de Estoque.',
+      'Exporte em PDF ou Excel.',
+      'Disponivel para Admin do estabelecimento.',
     ]
   },
   {
     icon: Bell, title: 'Alertas e Notificacoes',
     items: [
-      'Caixa de Entrada: Veja todas as notificacoes do sistema. Marque como lida ou marque todas de uma vez.',
-      'Estoque Minimo: Configure a quantidade minima de cada produto no estoque.',
-      'Quando o estoque de um produto ficar igual ou abaixo do minimo configurado, voce recebera uma notificacao automatica.',
-      'Para configurar, va na aba "Estoque Minimo", encontre o produto e clique em "Configurar".',
+      'Caixa de entrada com notificacoes do sistema.',
+      'Configure o estoque minimo por produto - alertas serao gerados quando atingir o limite.',
     ]
   },
   {
     icon: TrendingUp, title: 'Auditoria',
     items: [
-      'Registra todas as acoes feitas no sistema: criacao, edicao, exclusao, transferencias e processamentos.',
-      'Use os filtros para buscar por data, usuario, tipo de acao ou tipo de registro.',
-      'O ID completo de cada registro e exibido para rastreabilidade.',
-      'Exporte todo o historico para Excel clicando em "Exportar Excel".',
+      'Historico completo de acoes no sistema com filtros e exportacao em Excel.',
+      'Cada acao registra usuario, entidade, ID e timestamp.',
     ]
   },
   {
-    icon: Users, title: 'Usuarios',
+    icon: Users, title: 'Usuarios e Papeis (RBAC)',
     items: [
-      'Crie novos usuarios com nome, email, senha e nivel de acesso.',
-      'Desenvolvedor: acesso total a todas as funcionalidades.',
-      'Gerente: acesso a relatorios, auditoria e gerenciamento de usuarios.',
-      'Operacional: acesso basico a produtos, estoque, notas fiscais e alertas.',
-      'Voce pode editar dados, alterar nivel de acesso, ativar/desativar e excluir usuarios.',
+      'Master Global: gerencia estabelecimentos e usuarios em toda a plataforma.',
+      'Administrador: gerencia todos os recursos do seu estabelecimento.',
+      'Logistica (PAI): opera o almoxarifado central, aprova requisicoes.',
+      'Operacional (FILHO): opera um setor operacional, cria requisicoes ao PAI.',
     ]
   },
 ];
@@ -105,9 +113,8 @@ export const GuidePage = () => {
     <div className="p-4 md:p-8" data-testid="guide-page">
       <div className="mb-8">
         <h1 className="text-2xl md:text-4xl font-semibold font-primary text-zinc-900 tracking-tight">Guia do Sistema</h1>
-        <p className="mt-1 text-sm text-zinc-600">Explicacao de cada funcionalidade do Gestao TJ</p>
+        <p className="mt-1 text-sm text-zinc-600">Tudo sobre o Gestao TJ (SaaS multi-tenant com hierarquia PAI/FILHO)</p>
       </div>
-
       <div className="space-y-6">
         {sections.map((section, idx) => {
           const Icon = section.icon;
@@ -121,11 +128,7 @@ export const GuidePage = () => {
               </div>
               <div className="p-5">
                 <ul className="space-y-2">
-                  {section.items.map((item, i) => (
-                    <li key={i} className={`text-sm text-zinc-700 leading-relaxed ${item.startsWith('  -') ? 'ml-4 text-zinc-600' : ''}`}>
-                      {item}
-                    </li>
-                  ))}
+                  {section.items.map((item, i) => <li key={i} className="text-sm text-zinc-700 leading-relaxed">{item}</li>)}
                 </ul>
               </div>
             </div>

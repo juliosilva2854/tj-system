@@ -16,6 +16,8 @@ import { UsersPage } from './components/UsersPage';
 import { WarehousesPage } from './components/WarehousesPage';
 import { AlertsPage } from './components/AlertsPage';
 import { GuidePage } from './components/GuidePage';
+import { TenantsPage } from './components/TenantsPage';
+import { RequisitionsPage } from './components/RequisitionsPage';
 
 const seedDB = async () => { try { await authAPI.seed(); } catch {} };
 
@@ -29,9 +31,11 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<DashboardHome />} />
+            <Route path="tenants" element={<TenantsPage />} />
             <Route path="products" element={<ProductsPage />} />
             <Route path="warehouses" element={<WarehousesPage />} />
             <Route path="inventory" element={<InventoryPage />} />
+            <Route path="requisitions" element={<RequisitionsPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="invoices" element={<InvoicesPage />} />
             <Route path="reports" element={<ReportsPage />} />

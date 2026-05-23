@@ -10,7 +10,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use((r) => r, (error) => {
   if (error.response?.status === 401) {
     localStorage.removeItem('token'); localStorage.removeItem('user');
-    window.location.href = '/login';
+    if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
   }
   return Promise.reject(error);
 });
@@ -18,7 +18,12 @@ api.interceptors.response.use((r) => r, (error) => {
 export const authAPI = {
   login: (c) => api.post('/auth/login', c),
   register: (d) => api.post('/auth/register', d),
+  me: () => api.get('/auth/me'),
   seed: () => api.post('/seed'),
+};
+export const tenantsAPI = {
+  getAll: () => api.get('/tenants'),
+  create: (d) => api.post('/tenants', d),
 };
 export const usersAPI = {
   getAll: () => api.get('/users'),
@@ -41,12 +46,17 @@ export const productsAPI = {
   getAll: () => api.get('/products'),
   create: (d) => api.post('/products', d),
   update: (id, d) => api.patch(`/products/${id}`, d),
-  delete: (id) => api.delete(`/products/${id}`),
   transfer: (id, warehouseId, qty, sector) => api.post(`/products/${id}/transfer?warehouse_id=${warehouseId}&quantity=${qty}&sector=${encodeURIComponent(sector || '')}`),
 };
 export const inventoryAPI = {
   getAll: () => api.get('/inventory'),
   adjust: (pid, wid, qty) => api.post(`/inventory/adjust?product_id=${pid}&warehouse_id=${wid}&quantity=${qty}`),
+};
+export const requisitionsAPI = {
+  getAll: () => api.get('/requisitions'),
+  create: (d) => api.post('/requisitions', d),
+  approve: (id) => api.post(`/requisitions/${id}/approve`),
+  reject: (id) => api.post(`/requisitions/${id}/reject`),
 };
 export const invoicesAPI = {
   getAll: () => api.get('/invoices'),
@@ -70,16 +80,24 @@ export const auditAPI = {
   getLogs: () => api.get('/audit'),
   exportExcel: () => api.get('/audit/export', { responseType: 'blob' }),
 };
-export const alertsAPI = {
-  getConfigs: () => api.get('/alerts/config'),
-  createConfig: (d) => api.post('/alerts/config', d),
-  updateConfig: (id, d) => api.patch(`/alerts/config/${id}`, d),
-  deleteConfig: (id) => api.delete(`/alerts/config/${id}`),
-};
 export const notificationsAPI = {
   getAll: () => api.get('/notifications'),
   getUnreadCount: () => api.get('/notifications/unread-count'),
   markRead: (id) => api.patch(`/notifications/${id}/read`),
   markAllRead: () => api.post('/notifications/read-all'),
 };
+
+export const getSubdomain = () => {
+  const host = window.location.hostname;
+  // Reads first label only when host has multiple labels (e.g., master.sconnecta.com.br)
+  const parts = host.split('.');
+  if (parts.length < 3) return null;
+  return parts[0];
+};
+
+export const isMasterSubdomain = () => {
+  const sub = getSubdomain();
+  return sub === 'master';
+};
+
 export default api;
