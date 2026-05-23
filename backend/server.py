@@ -1,34 +1,28 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, UploadFile, File, BackgroundTasks
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request, UploadFile, File
+from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import os, logging, json, uuid, base64
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, List
-import json
-import uuid
-import base64
 
 from models import (
-    User, UserCreate, UserLogin, Token,
-    Warehouse, WarehouseCreate, WarehouseUpdate,
-    Supplier, SupplierCreate, SupplierUpdate,
-    Product, ProductCreate, ProductUpdate,
-    Invoice, InvoiceCreate, OCRRequest,
-    Sale, SaleCreate,
-    DashboardStats, StockAlert, FinancialReport, AuditLog,
-    AlertConfig, AlertConfigCreate, Notification, NotificationCreate,
-    Order, OrderCreate, OrderUpdate, CashFlowReport
+    TenantCreate, Tenant, UserCreate, UserLogin, UserOut,
+    WarehouseCreate, Warehouse, ProductCreate, Product,
+    InvoiceCreate, Invoice, InvoiceItemInput, OCRRequest,
+    RequisitionCreate, Requisition, SaleCreate,
+    SupplierCreate, gen_id
 )
-from auth import hash_password, verify_password, create_token, decode_token
+from auth import hash_password, verify_password, create_access_token, create_refresh_token, decode_token
 from audit import AuditLogger
-from openai import OpenAI
-from email_service import send_email, build_stock_alert_email, build_invoice_pending_email, build_sale_completed_email
-from report_export import generate_financial_pdf, generate_financial_excel
 from nfe_parser import parse_nfe_xml
+from report_export import generate_financial_pdf, generate_financial_excel
+from email_service import send_email, build_stock_alert_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -36,1045 +30,811 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+audit = AuditLogger(db)
 
-audit_logger = AuditLogger(db)
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI(title="Gestao TJ - SaaS Multi-Tenant")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app = FastAPI()
-api_router = APIRouter(prefix="/api")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+api = APIRouter(prefix="/api")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════
+# SECURITY MIDDLEWARE
+# ═══════════════════════════════════════════════
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization or not authorization.startswith('Bearer '):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated"
-        )
-    
-    token = authorization.replace('Bearer ', '')
-    payload = decode_token(token)
-    
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-    
+        raise HTTPException(status_code=401, detail="Nao autenticado")
+    payload = decode_token(authorization[7:])
+    if not payload or payload.get('type') != 'access':
+        raise HTTPException(status_code=401, detail="Token invalido ou expirado")
     return payload
 
-async def require_role(user: dict, allowed_roles: List[str]):
-    if user['role'] not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions"
-        )
+def require_roles(*roles):
+    async def checker(user: dict = Depends(get_current_user)):
+        if user['role'] not in roles:
+            raise HTTPException(status_code=403, detail="Permissao insuficiente")
+        return user
+    return checker
 
-@api_router.post("/auth/register", response_model=User)
-async def register(user_data: UserCreate, current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    
-    existing = await db.users.find_one({"email": user_data.email}, {"_id": 0})
+async def verify_tenant_access(user: dict, tenant_id: str):
+    if user['role'] == 'master':
+        return
+    if user.get('tenant_id') != tenant_id:
+        raise HTTPException(status_code=403, detail="Acesso negado a este estabelecimento")
+
+async def get_user_tenant(user: dict) -> str:
+    if user['role'] == 'master':
+        return None
+    tid = user.get('tenant_id')
+    if not tid:
+        raise HTTPException(status_code=403, detail="Usuario sem estabelecimento vinculado")
+    return tid
+
+# ═══════════════════════════════════════════════
+# AUTH
+# ═══════════════════════════════════════════════
+
+@api.post("/auth/login")
+@limiter.limit("10/minute")
+async def login(request: Request, creds: UserLogin):
+    doc = await db.users.find_one({"email": creds.email}, {"_id": 0})
+    if not doc or not verify_password(creds.password, doc['password_hash']):
+        raise HTTPException(status_code=401, detail="Email ou senha incorretos")
+    if not doc.get('active', True):
+        raise HTTPException(status_code=403, detail="Conta inativa")
+    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''))
+    refresh = create_refresh_token(doc['id'])
+    user_out = {k: doc[k] for k in ['id', 'email', 'name', 'role', 'tenant_id', 'warehouse_id', 'active', 'created_at'] if k in doc}
+    return {"access_token": access, "refresh_token": refresh, "user": user_out}
+
+@api.post("/auth/refresh")
+async def refresh_token(request: Request):
+    body = await request.json()
+    token = body.get('refresh_token')
+    if not token:
+        raise HTTPException(status_code=400, detail="Refresh token obrigatorio")
+    payload = decode_token(token)
+    if not payload or payload.get('type') != 'refresh':
+        raise HTTPException(status_code=401, detail="Refresh token invalido")
+    doc = await db.users.find_one({"id": payload['sub']}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=401, detail="Usuario nao encontrado")
+    access = create_access_token(doc['id'], doc['email'], doc['role'], doc.get('tenant_id', ''))
+    return {"access_token": access}
+
+@api.post("/auth/register")
+async def register(data: UserCreate, user: dict = Depends(require_roles("master", "admin"))):
+    if user['role'] == 'admin' and data.role == 'master':
+        raise HTTPException(status_code=403, detail="Admin nao pode criar master")
+    if user['role'] == 'admin':
+        data.tenant_id = user.get('tenant_id')
+    existing = await db.users.find_one({"email": data.email}, {"_id": 0})
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    hashed_pw = hash_password(user_data.password)
-    user_dict = user_data.model_dump(exclude={'password'})
-    user_obj = User(**user_dict, created_at=datetime.now(timezone.utc))
-    
-    doc = user_obj.model_dump()
-    doc['password_hash'] = hashed_pw
-    doc['created_at'] = doc['created_at'].isoformat()
-    
+        raise HTTPException(status_code=400, detail="Email ja cadastrado")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": gen_id(), "email": data.email, "name": data.name, "role": data.role,
+        "tenant_id": data.tenant_id or "", "warehouse_id": data.warehouse_id or "",
+        "password_hash": hash_password(data.password), "active": True, "created_at": now
+    }
     await db.users.insert_one(doc)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "CREATE",
-        "user",
-        user_obj.id,
-        {"email": user_obj.email, "role": user_obj.role}
-    )
-    
-    return user_obj
+    await audit.log(user['sub'], user['email'], "CRIAR", "usuario", doc['id'], doc.get('tenant_id', ''))
+    doc.pop('password_hash')
+    return doc
 
-@api_router.post("/auth/login", response_model=Token)
-async def login(credentials: UserLogin):
-    user_doc = await db.users.find_one({"email": credentials.email}, {"_id": 0})
-    
-    if not user_doc or not verify_password(credentials.password, user_doc['password_hash']):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
-    
-    if not user_doc.get('active', True):
-        raise HTTPException(status_code=403, detail="User account is inactive")
-    
-    user_doc.pop('password_hash')
-    user_doc['created_at'] = datetime.fromisoformat(user_doc['created_at'])
-    user = User(**user_doc)
-    
-    token = create_token(user.id, user.email, user.role)
-    
-    return Token(access_token=token, user=user)
+# ═══════════════════════════════════════════════
+# TENANTS
+# ═══════════════════════════════════════════════
 
-@api_router.get("/auth/me", response_model=User)
-async def get_me(current_user: dict = Depends(get_current_user)):
-    user_doc = await db.users.find_one({"id": current_user['user_id']}, {"_id": 0, "password_hash": 0})
-    if not user_doc:
-        raise HTTPException(status_code=404, detail="User not found")
-    user_doc['created_at'] = datetime.fromisoformat(user_doc['created_at'])
-    return User(**user_doc)
-
-@api_router.get("/users", response_model=List[User])
-async def get_users(current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
-    for u in users:
-        u['created_at'] = datetime.fromisoformat(u['created_at'])
-    return [User(**u) for u in users]
-
-@api_router.patch("/users/{user_id}")
-async def update_user(user_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    
-    if 'password' in updates:
-        updates['password_hash'] = hash_password(updates.pop('password'))
-    
-    result = await db.users.update_one({"id": user_id}, {"$set": updates})
-    
-    if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "UPDATE",
-        "user",
-        user_id,
-        updates
-    )
-    
-    return {"message": "User updated successfully"}
-
-@api_router.post("/warehouses", response_model=Warehouse)
-async def create_warehouse(warehouse_data: WarehouseCreate, current_user: dict = Depends(get_current_user)):
-    warehouse = Warehouse(
-        **warehouse_data.model_dump(),
-        created_at=datetime.now(timezone.utc),
-        created_by=current_user['user_id']
-    )
-    
-    doc = warehouse.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.warehouses.insert_one(doc)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "CREATE",
-        "warehouse",
-        warehouse.id
-    )
-    
-    return warehouse
-
-@api_router.get("/warehouses", response_model=List[Warehouse])
-async def get_warehouses(current_user: dict = Depends(get_current_user)):
-    warehouses = await db.warehouses.find({}, {"_id": 0}).to_list(1000)
-    for w in warehouses:
-        w['created_at'] = datetime.fromisoformat(w['created_at'])
-    return [Warehouse(**w) for w in warehouses]
-
-@api_router.post("/suppliers", response_model=Supplier)
-async def create_supplier(supplier_data: SupplierCreate, current_user: dict = Depends(get_current_user)):
-    supplier = Supplier(
-        **supplier_data.model_dump(),
-        created_at=datetime.now(timezone.utc),
-        created_by=current_user['user_id']
-    )
-    
-    doc = supplier.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.suppliers.insert_one(doc)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "CREATE",
-        "supplier",
-        supplier.id
-    )
-    
-    return supplier
-
-@api_router.get("/suppliers", response_model=List[Supplier])
-async def get_suppliers(current_user: dict = Depends(get_current_user)):
-    suppliers = await db.suppliers.find({}, {"_id": 0}).to_list(1000)
-    for s in suppliers:
-        s['created_at'] = datetime.fromisoformat(s['created_at'])
-    return [Supplier(**s) for s in suppliers]
-
-@api_router.post("/products", response_model=Product)
-async def create_product(product_data: ProductCreate, current_user: dict = Depends(get_current_user)):
-    existing = await db.products.find_one({"sku": product_data.sku}, {"_id": 0})
+@api.post("/tenants")
+async def create_tenant(data: TenantCreate, user: dict = Depends(require_roles("master"))):
+    existing = await db.tenants.find_one({"slug": data.slug}, {"_id": 0})
     if existing:
-        raise HTTPException(status_code=400, detail="SKU already exists")
-    
-    product = Product(
-        **product_data.model_dump(),
-        created_at=datetime.now(timezone.utc),
-        created_by=current_user['user_id']
-    )
-    
-    doc = product.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
+        raise HTTPException(status_code=400, detail="Slug ja em uso")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"id": gen_id(), "name": data.name, "slug": data.slug, "active": True, "created_at": now}
+    await db.tenants.insert_one(doc)
+    await audit.log(user['sub'], user['email'], "CRIAR", "tenant", doc['id'])
+    return doc
+
+@api.get("/tenants")
+async def list_tenants(user: dict = Depends(require_roles("master"))):
+    docs = await db.tenants.find({}, {"_id": 0}).to_list(1000)
+    return docs
+
+# ═══════════════════════════════════════════════
+# USERS
+# ═══════════════════════════════════════════════
+
+@api.get("/users")
+async def list_users(user: dict = Depends(require_roles("master", "admin"))):
+    q = {}
+    if user['role'] == 'admin':
+        q['tenant_id'] = user.get('tenant_id')
+    docs = await db.users.find(q, {"_id": 0, "password_hash": 0}).to_list(1000)
+    return docs
+
+@api.patch("/users/{uid}")
+async def update_user(uid: str, request: Request, user: dict = Depends(require_roles("master", "admin"))):
+    body = await request.json()
+    body.pop('id', None)
+    body.pop('email', None)
+    if 'password' in body:
+        body['password_hash'] = hash_password(body.pop('password'))
+    target = await db.users.find_one({"id": uid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    if user['role'] == 'admin' and target.get('tenant_id') != user.get('tenant_id'):
+        raise HTTPException(status_code=403, detail="Sem permissao")
+    await db.users.update_one({"id": uid}, {"$set": body})
+    await audit.log(user['sub'], user['email'], "EDITAR", "usuario", uid, user.get('tenant_id', ''))
+    return {"message": "Atualizado"}
+
+@api.delete("/users/{uid}")
+async def delete_user(uid: str, user: dict = Depends(require_roles("master"))):
+    if uid == user['sub']:
+        raise HTTPException(status_code=400, detail="Nao pode excluir a si mesmo")
+    r = await db.users.delete_one({"id": uid})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    return {"message": "Excluido"}
+
+# ═══════════════════════════════════════════════
+# WAREHOUSES (PAI / FILHO)
+# ═══════════════════════════════════════════════
+
+@api.post("/warehouses")
+async def create_warehouse(data: WarehouseCreate, user: dict = Depends(require_roles("master", "admin"))):
+    tid = user.get('tenant_id', '')
+    if user['role'] == 'master' and not tid:
+        body = data.model_dump()
+        tid = body.get('tenant_id', '')
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": gen_id(), "tenant_id": tid, "name": data.name, "location": data.location,
+        "description": data.description or "", "type": data.type,
+        "parent_id": data.parent_id or "", "sectors": data.sectors,
+        "active": True, "created_at": now, "created_by": user['sub']
+    }
+    await db.warehouses.insert_one(doc)
+    await audit.log(user['sub'], user['email'], "CRIAR", "deposito", doc['id'], tid)
+    return doc
+
+@api.get("/warehouses")
+async def list_warehouses(user: dict = Depends(get_current_user)):
+    q = {}
+    tid = user.get('tenant_id')
+    if user['role'] != 'master' and tid:
+        q['tenant_id'] = tid
+    if user['role'] == 'operacional' and user.get('warehouse_id'):
+        q['id'] = user.get('warehouse_id')
+    docs = await db.warehouses.find(q, {"_id": 0}).to_list(1000)
+    return docs
+
+@api.patch("/warehouses/{wid}")
+async def update_warehouse(wid: str, request: Request, user: dict = Depends(require_roles("master", "admin"))):
+    body = await request.json()
+    target = await db.warehouses.find_one({"id": wid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, target['tenant_id'])
+    body.pop('id', None)
+    body.pop('tenant_id', None)
+    await db.warehouses.update_one({"id": wid}, {"$set": body})
+    return {"message": "Atualizado"}
+
+@api.delete("/warehouses/{wid}")
+async def delete_warehouse(wid: str, user: dict = Depends(require_roles("master", "admin"))):
+    target = await db.warehouses.find_one({"id": wid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, target['tenant_id'])
+    await db.warehouses.delete_one({"id": wid})
+    return {"message": "Excluido"}
+
+# ═══════════════════════════════════════════════
+# PRODUCTS
+# ═══════════════════════════════════════════════
+
+@api.post("/products")
+async def create_product(data: ProductCreate, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": gen_id(), "tenant_id": tid, **data.model_dump(),
+        "available_qty": 0, "active": True, "created_at": now, "created_by": user['sub']
+    }
     await db.products.insert_one(doc)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "CREATE",
-        "product",
-        product.id
-    )
-    
-    return product
+    return doc
 
-@api_router.get("/products", response_model=List[Product])
-async def get_products(current_user: dict = Depends(get_current_user)):
-    products = await db.products.find({}, {"_id": 0}).to_list(5000)
-    for p in products:
-        p['created_at'] = datetime.fromisoformat(p['created_at'])
-    return [Product(**p) for p in products]
+@api.get("/products")
+async def list_products(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    docs = await db.products.find(q, {"_id": 0}).to_list(5000)
+    return docs
 
-@api_router.get("/inventory")
-async def get_inventory(current_user: dict = Depends(get_current_user)):
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    
+@api.patch("/products/{pid}")
+async def update_product(pid: str, request: Request, user: dict = Depends(get_current_user)):
+    body = await request.json()
+    target = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, target['tenant_id'])
+    body.pop('id', None)
+    body.pop('tenant_id', None)
+    await db.products.update_one({"id": pid}, {"$set": body})
+    return {"message": "Atualizado"}
+
+@api.post("/products/{pid}/transfer")
+async def transfer_product(pid: str, warehouse_id: str, quantity: float, sector: str = "", user: dict = Depends(get_current_user)):
+    product = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Produto nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, product['tenant_id'])
+    wh = await db.warehouses.find_one({"id": warehouse_id}, {"_id": 0})
+    if not wh:
+        raise HTTPException(status_code=404, detail="Deposito nao encontrado")
+    avail = product.get('available_qty', 0)
+    if quantity > avail:
+        quantity = avail
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantidade invalida")
+    inv = await db.inventory.find_one({"product_id": pid, "warehouse_id": warehouse_id, "tenant_id": product['tenant_id']}, {"_id": 0})
+    now = datetime.now(timezone.utc).isoformat()
+    if inv:
+        await db.inventory.update_one({"id": inv['id']}, {"$set": {"quantity": inv['quantity'] + quantity, "updated_at": now}})
+    else:
+        await db.inventory.insert_one({
+            "id": gen_id(), "tenant_id": product['tenant_id'], "product_id": pid, "warehouse_id": warehouse_id,
+            "quantity": quantity, "updated_at": now
+        })
+    new_avail = avail - quantity
+    if new_avail <= 0:
+        await db.products.delete_one({"id": pid})
+        msg = f"Transferido {quantity} para {wh['name']}. Produto removido da aba."
+    else:
+        await db.products.update_one({"id": pid}, {"$set": {"available_qty": new_avail}})
+        msg = f"Transferido {quantity} para {wh['name']}. Restam {new_avail}."
+    await audit.log(user['sub'], user['email'], "TRANSFERIR", "produto", pid, product['tenant_id'], {"deposito": wh['name'], "quantidade": quantity, "setor": sector})
+    return {"message": msg, "removed": new_avail <= 0}
+
+# ═══════════════════════════════════════════════
+# INVENTORY
+# ═══════════════════════════════════════════════
+
+@api.get("/inventory")
+async def list_inventory(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    if user['role'] == 'operacional' and user.get('warehouse_id'):
+        q['warehouse_id'] = user.get('warehouse_id')
+    items = await db.inventory.find(q, {"_id": 0}).to_list(5000)
     result = []
-    for item in inventory:
-        product = await db.products.find_one({"id": item['product_id']}, {"_id": 0})
-        warehouse = await db.warehouses.find_one({"id": item['warehouse_id']}, {"_id": 0})
-        
-        if product and warehouse:
-            result.append({
-                "id": item['id'],
-                "product_id": item['product_id'],
-                "product_name": product['name'],
-                "product_sku": product['sku'],
-                "warehouse_id": item['warehouse_id'],
-                "warehouse_name": warehouse['name'],
-                "quantity": item['quantity'],
-                "min_stock": product.get('min_stock', 0),
-                "updated_at": item['updated_at']
-            })
-    
+    for it in items:
+        p = await db.products.find_one({"id": it['product_id']}, {"_id": 0}) or await db.inventory.find_one({"product_id": it['product_id']}, {"_id": 0})
+        w = await db.warehouses.find_one({"id": it['warehouse_id']}, {"_id": 0})
+        pdata = await db.products.find_one({"id": it['product_id']}, {"_id": 0})
+        pname = pdata['name'] if pdata else it.get('product_name', 'Desconhecido')
+        psku = pdata['sku'] if pdata else it.get('product_sku', '')
+        min_s = pdata.get('min_stock', 0) if pdata else 0
+        result.append({
+            "id": it['id'], "tenant_id": it.get('tenant_id', ''),
+            "product_id": it['product_id'], "product_name": pname, "product_sku": psku,
+            "warehouse_id": it['warehouse_id'], "warehouse_name": w['name'] if w else 'Desconhecido',
+            "warehouse_type": w.get('type', 'pai') if w else 'pai',
+            "quantity": it['quantity'], "min_stock": min_s,
+            "updated_at": it.get('updated_at', '')
+        })
     return result
 
-@api_router.post("/inventory/adjust")
-async def adjust_inventory(
-    product_id: str,
-    warehouse_id: str,
-    quantity: float,
-    current_user: dict = Depends(get_current_user)
-):
-    existing = await db.inventory.find_one(
-        {"product_id": product_id, "warehouse_id": warehouse_id},
-        {"_id": 0}
-    )
-    
-    if existing:
-        new_qty = existing['quantity'] + quantity
-        if new_qty < 0:
-            new_qty = 0
-        await db.inventory.update_one(
-            {"id": existing['id']},
-            {"$set": {"quantity": new_qty, "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+@api.post("/inventory/adjust")
+async def adjust_inventory(product_id: str, warehouse_id: str, quantity: float, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    inv = await db.inventory.find_one({"product_id": product_id, "warehouse_id": warehouse_id}, {"_id": 0})
+    now = datetime.now(timezone.utc).isoformat()
+    if inv:
+        new_qty = max(0, inv['quantity'] + quantity)
+        await db.inventory.update_one({"id": inv['id']}, {"$set": {"quantity": new_qty, "updated_at": now}})
     else:
-        item = {
-            "id": str(uuid.uuid4()),
-            "product_id": product_id,
-            "warehouse_id": warehouse_id,
-            "quantity": quantity,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.inventory.insert_one(item)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "ADJUST",
-        "inventory",
-        f"{product_id}:{warehouse_id}",
-        {"quantity": quantity}
-    )
-    
-    return {"message": "Inventory adjusted successfully"}
-
-@api_router.post("/invoices", response_model=Invoice)
-async def create_invoice(invoice_data: InvoiceCreate, current_user: dict = Depends(get_current_user)):
-    invoice = Invoice(
-        **invoice_data.model_dump(),
-        created_at=datetime.now(timezone.utc),
-        created_by=current_user['user_id']
-    )
-    
-    doc = invoice.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.invoices.insert_one(doc)
-    
-    await audit_logger.log(
-        current_user['user_id'],
-        current_user['email'],
-        "CREATE",
-        "invoice",
-        invoice.id
-    )
-    
-    return invoice
-
-@api_router.get("/invoices", response_model=List[Invoice])
-async def get_invoices(current_user: dict = Depends(get_current_user)):
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(5000)
-    for inv in invoices:
-        inv['created_at'] = datetime.fromisoformat(inv['created_at'])
-    return [Invoice(**inv) for inv in invoices]
-
-@api_router.post("/invoices/ocr")
-async def process_invoice_ocr(ocr_request: OCRRequest, current_user: dict = Depends(get_current_user)):
-    try:
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            raise HTTPException(status_code=500, detail="OPENAI_API_KEY nao configurada no .env")
-        
-        client_ai = OpenAI(api_key=api_key)
-        
-        prompt_text = """Analise esta imagem de nota fiscal brasileira com EXTREMA ATENCAO aos numeros e quantidades.
-
-INSTRUCOES CRITICAS:
-- Leia CADA item linha por linha
-- A QUANTIDADE (QTD) e o numero de unidades compradas - geralmente um numero inteiro ou com 3 casas decimais
-- O VALOR UNITARIO e o preco de UMA unidade do produto
-- O VALOR TOTAL do item = quantidade x valor unitario
-- NAO confunda quantidade com codigo do produto
-- Preste atencao em unidades como UN, KG, CX, PCT, LT
-
-Retorne SOMENTE um JSON valido neste formato exato:
-{
-  "invoice_number": "numero da nota",
-  "supplier_name": "nome do fornecedor/emitente",
-  "issue_date": "YYYY-MM-DD",
-  "total_value": 0.0,
-  "tax_value": 0.0,
-  "items": [
-    {
-      "product_name": "descricao do produto",
-      "product_sku": "codigo do produto se visivel",
-      "quantity": 0.0,
-      "unit_price": 0.0,
-      "total": 0.0
-    }
-  ]
-}
-Retorne SOMENTE o JSON, sem explicacoes."""
-        
-        response = client_ai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "Voce e um especialista em extrair dados de notas fiscais brasileiras (NFe). Extraia todas as informacoes relevantes em formato JSON."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{ocr_request.image_base64}"}}
-                ]}
-            ],
-            max_tokens=4000,
-            temperature=0
-        )
-        
-        response_text = response.choices[0].message.content.strip()
-        if response_text.startswith('```json'):
-            response_text = response_text[7:]
-        if response_text.startswith('```'):
-            response_text = response_text[3:]
-        if response_text.endswith('```'):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-        
-        extracted_data = json.loads(response_text)
-        
-        return extracted_data
-        
-    except Exception as e:
-        logger.error(f"OCR processing error: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro no OCR: {str(e)}")
-
-@api_router.get("/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
-    total_products = await db.products.count_documents({"active": True})
-    total_suppliers = await db.suppliers.count_documents({"active": True})
-    total_warehouses = await db.warehouses.count_documents({"active": True})
-    
-    today = datetime.now(timezone.utc).date()
-    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc).isoformat()
-    
-    sales_today = await db.sales.find({
-        "created_at": {"$gte": today_start},
-        "status": "completed"
-    }, {"_id": 0}).to_list(1000)
-    total_sales_today = sum(s.get('total', 0) for s in sales_today)
-    
-    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0).isoformat()
-    sales_month = await db.sales.find({
-        "created_at": {"$gte": month_start},
-        "status": "completed"
-    }, {"_id": 0}).to_list(5000)
-    total_sales_month = sum(s.get('total', 0) for s in sales_month)
-    
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    low_stock_count = 0
-    for item in inventory:
-        product = await db.products.find_one({"id": item['product_id']}, {"_id": 0})
-        if product and item['quantity'] <= product.get('min_stock', 0):
-            low_stock_count += 1
-    
-    pending_invoices = await db.invoices.count_documents({"status": "pending"})
-    
-    return DashboardStats(
-        total_products=total_products,
-        total_suppliers=total_suppliers,
-        total_warehouses=total_warehouses,
-        total_sales_today=total_sales_today,
-        total_sales_month=total_sales_month,
-        low_stock_alerts=low_stock_count,
-        pending_invoices=pending_invoices
-    )
-
-@api_router.get("/dashboard/alerts", response_model=List[StockAlert])
-async def get_stock_alerts(current_user: dict = Depends(get_current_user)):
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    alerts = []
-    
-    for item in inventory:
-        product = await db.products.find_one({"id": item['product_id']}, {"_id": 0})
-        warehouse = await db.warehouses.find_one({"id": item['warehouse_id']}, {"_id": 0})
-        
-        if product and warehouse and item['quantity'] <= product.get('min_stock', 0):
-            alerts.append(StockAlert(
-                product_id=item['product_id'],
-                product_name=product['name'],
-                warehouse_id=item['warehouse_id'],
-                warehouse_name=warehouse['name'],
-                current_quantity=item['quantity'],
-                min_stock=product.get('min_stock', 0)
-            ))
-    
-    return alerts
-
-@api_router.get("/reports/financial")
-async def get_financial_report(period: str, current_user: dict = Depends(get_current_user)):
-    if period == "month":
-        start_date = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0).isoformat()
-    else:
-        start_date = datetime.now(timezone.utc).replace(month=1, day=1, hour=0, minute=0, second=0).isoformat()
-    
-    sales = await db.sales.find({
-        "created_at": {"$gte": start_date},
-        "status": "completed"
-    }, {"_id": 0}).to_list(10000)
-    
-    revenue = sum(s.get('total', 0) for s in sales)
-    
-    cost = 0
-    for sale in sales:
-        for item in sale.get('items', []):
-            product = await db.products.find_one({"id": item['product_id']}, {"_id": 0})
-            if product:
-                cost += product.get('cost_price', 0) * item['quantity']
-    
-    gross_profit = revenue - cost
-    profit_margin = (gross_profit / revenue * 100) if revenue > 0 else 0
-    
-    return FinancialReport(
-        period=period,
-        revenue=revenue,
-        cost=cost,
-        gross_profit=gross_profit,
-        profit_margin=profit_margin,
-        expenses=0,
-        net_profit=gross_profit
-    )
-
-# === ADVANCED REPORTS ===
-
-@api_router.get("/reports/abc-curve")
-async def get_abc_curve(current_user: dict = Depends(get_current_user)):
-    sales = await db.sales.find({"status": "completed"}, {"_id": 0}).to_list(10000)
-    product_revenue = {}
-    for sale in sales:
-        for item in sale.get('items', []):
-            pid = item.get('product_id', '')
-            pname = item.get('product_name', '')
-            rev = item.get('total', 0)
-            if pid in product_revenue:
-                product_revenue[pid]['revenue'] += rev
-                product_revenue[pid]['quantity'] += item.get('quantity', 0)
-            else:
-                product_revenue[pid] = {'product_id': pid, 'product_name': pname, 'revenue': rev, 'quantity': item.get('quantity', 0)}
-    
-    items = sorted(product_revenue.values(), key=lambda x: x['revenue'], reverse=True)
-    total_rev = sum(i['revenue'] for i in items)
-    
-    cumulative = 0
-    for item in items:
-        cumulative += item['revenue']
-        pct = (cumulative / total_rev * 100) if total_rev > 0 else 0
-        item['percentage'] = round(item['revenue'] / total_rev * 100, 1) if total_rev > 0 else 0
-        item['cumulative'] = round(pct, 1)
-        if pct <= 80:
-            item['class'] = 'A'
-        elif pct <= 95:
-            item['class'] = 'B'
-        else:
-            item['class'] = 'C'
-    
-    return {"items": items, "total_revenue": total_rev}
-
-@api_router.get("/reports/inventory-turnover")
-async def get_inventory_turnover(current_user: dict = Depends(get_current_user)):
-    products = await db.products.find({"active": True}, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find({"status": "completed"}, {"_id": 0}).to_list(10000)
-    
-    product_sales = {}
-    for sale in sales:
-        for item in sale.get('items', []):
-            pid = item.get('product_id', '')
-            qty = item.get('quantity', 0)
-            product_sales[pid] = product_sales.get(pid, 0) + qty
-    
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    product_stock = {}
-    for inv in inventory:
-        pid = inv.get('product_id', '')
-        product_stock[pid] = product_stock.get(pid, 0) + inv.get('quantity', 0)
-    
-    results = []
-    for p in products:
-        pid = p['id']
-        sold = product_sales.get(pid, 0)
-        stock = product_stock.get(pid, 0)
-        avg_stock = stock if stock > 0 else 1
-        turnover = round(sold / avg_stock, 2) if avg_stock > 0 else 0
-        days_cover = round(avg_stock / (sold / 30), 0) if sold > 0 else 999
-        
-        results.append({
-            'product_id': pid,
-            'product_name': p['name'],
-            'sku': p['sku'],
-            'total_sold': sold,
-            'current_stock': stock,
-            'turnover_rate': turnover,
-            'days_of_coverage': min(days_cover, 999),
-            'status': 'critico' if days_cover < 7 else 'baixo' if days_cover < 15 else 'normal' if days_cover < 60 else 'excesso'
+        if quantity < 0:
+            raise HTTPException(status_code=400, detail="Nao ha estoque para dar baixa")
+        await db.inventory.insert_one({
+            "id": gen_id(), "tenant_id": tid, "product_id": product_id,
+            "warehouse_id": warehouse_id, "quantity": max(0, quantity), "updated_at": now
         })
-    
-    results.sort(key=lambda x: x['turnover_rate'], reverse=True)
-    return {"items": results}
+    await audit.log(user['sub'], user['email'], "AJUSTAR", "estoque", f"{product_id}:{warehouse_id}", tid, {"quantidade": quantity})
+    return {"message": "Estoque ajustado"}
 
-@api_router.get("/audit/export")
-async def export_audit_logs(current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    logs = await db.audit_logs.find({}, {"_id": 0}).sort('timestamp', -1).to_list(10000)
-    from report_export import generate_financial_excel
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-    import io
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Auditoria"
-    headers = ['Data/Hora', 'Usuario', 'Acao', 'Entidade', 'ID', 'Detalhes']
-    hfont = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
-    hfill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
-    for col, h in enumerate(headers, 1):
-        c = ws.cell(row=1, column=col, value=h)
-        c.font = hfont
-        c.fill = hfill
-    for i, log in enumerate(logs, 2):
-        ws.cell(row=i, column=1, value=log.get('timestamp', ''))
-        ws.cell(row=i, column=2, value=log.get('user_email', ''))
-        ws.cell(row=i, column=3, value=log.get('action', ''))
-        ws.cell(row=i, column=4, value=log.get('entity_type', ''))
-        ws.cell(row=i, column=5, value=log.get('entity_id', ''))
-        ws.cell(row=i, column=6, value=str(log.get('changes', '') or ''))
-    for col in ['A','B','C','D','E','F']:
-        ws.column_dimensions[col].width = 22
-    buf = io.BytesIO()
-    wb.save(buf)
-    return Response(content=buf.getvalue(),
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": "attachment; filename=auditoria.xlsx"})
+# ═══════════════════════════════════════════════
+# REQUISITIONS (FILHO -> PAI)
+# ═══════════════════════════════════════════════
 
-@api_router.post("/invoices/{invoice_id}/process-items")
-async def process_invoice_items_to_products(invoice_id: str, current_user: dict = Depends(get_current_user)):
-    invoice_doc = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
-    if not invoice_doc:
+@api.post("/requisitions")
+async def create_requisition(data: RequisitionCreate, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    wid = user.get('warehouse_id', '')
+    if not wid:
+        raise HTTPException(status_code=400, detail="Voce precisa estar vinculado a um deposito")
+    wh = await db.warehouses.find_one({"id": wid}, {"_id": 0})
+    if not wh or wh.get('type') != 'filho':
+        raise HTTPException(status_code=400, detail="Requisicoes sao criadas apenas por depositos filhos")
+    parent_id = wh.get('parent_id', '')
+    if not parent_id:
+        raise HTTPException(status_code=400, detail="Deposito filho sem pai vinculado")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": gen_id(), "tenant_id": tid, "from_warehouse_id": wid, "to_warehouse_id": parent_id,
+        "items": [i.model_dump() for i in data.items], "notes": data.notes or "",
+        "status": "pending", "created_at": now, "created_by": user['sub']
+    }
+    await db.requisitions.insert_one(doc)
+    await audit.log(user['sub'], user['email'], "CRIAR", "requisicao", doc['id'], tid)
+    return doc
+
+@api.get("/requisitions")
+async def list_requisitions(user: dict = Depends(get_current_user)):
+    q = {}
+    tid = user.get('tenant_id', '')
+    if user['role'] != 'master':
+        q['tenant_id'] = tid
+    if user['role'] == 'operacional':
+        q['from_warehouse_id'] = user.get('warehouse_id', '')
+    docs = await db.requisitions.find(q, {"_id": 0}).sort('created_at', -1).to_list(1000)
+    return docs
+
+@api.post("/requisitions/{rid}/approve")
+async def approve_requisition(rid: str, user: dict = Depends(require_roles("master", "admin", "logistica"))):
+    req = await db.requisitions.find_one({"id": rid}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Requisicao nao encontrada")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, req['tenant_id'])
+    if req['status'] != 'pending':
+        raise HTTPException(status_code=400, detail="Requisicao ja processada")
+    now = datetime.now(timezone.utc).isoformat()
+    pai_id = req['to_warehouse_id']
+    filho_id = req['from_warehouse_id']
+    for item in req['items']:
+        pid = item['product_id']
+        qty = item['quantity']
+        pai_inv = await db.inventory.find_one({"product_id": pid, "warehouse_id": pai_id}, {"_id": 0})
+        if not pai_inv or pai_inv['quantity'] < qty:
+            available = pai_inv['quantity'] if pai_inv else 0
+            raise HTTPException(status_code=400, detail=f"Estoque insuficiente no almoxarifado para {item['product_name']}. Disponivel: {available}")
+        new_pai_qty = max(0, pai_inv['quantity'] - qty)
+        await db.inventory.update_one({"id": pai_inv['id']}, {"$set": {"quantity": new_pai_qty, "updated_at": now}})
+        filho_inv = await db.inventory.find_one({"product_id": pid, "warehouse_id": filho_id}, {"_id": 0})
+        if filho_inv:
+            await db.inventory.update_one({"id": filho_inv['id']}, {"$set": {"quantity": filho_inv['quantity'] + qty, "updated_at": now}})
+        else:
+            await db.inventory.insert_one({
+                "id": gen_id(), "tenant_id": req['tenant_id'], "product_id": pid,
+                "warehouse_id": filho_id, "quantity": qty, "updated_at": now
+            })
+    await db.requisitions.update_one({"id": rid}, {"$set": {"status": "approved", "resolved_at": now, "resolved_by": user['sub']}})
+    await audit.log(user['sub'], user['email'], "APROVAR", "requisicao", rid, req['tenant_id'])
+    return {"message": "Requisicao aprovada. Itens transferidos."}
+
+@api.post("/requisitions/{rid}/reject")
+async def reject_requisition(rid: str, user: dict = Depends(require_roles("master", "admin", "logistica"))):
+    req = await db.requisitions.find_one({"id": rid}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Nao encontrada")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, req['tenant_id'])
+    now = datetime.now(timezone.utc).isoformat()
+    await db.requisitions.update_one({"id": rid}, {"$set": {"status": "rejected", "resolved_at": now, "resolved_by": user['sub']}})
+    return {"message": "Requisicao rejeitada"}
+
+# ═══════════════════════════════════════════════
+# SUPPLIERS
+# ═══════════════════════════════════════════════
+
+@api.post("/suppliers")
+async def create_supplier(data: SupplierCreate, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"id": gen_id(), "tenant_id": tid, **data.model_dump(), "active": True, "created_at": now, "created_by": user['sub']}
+    await db.suppliers.insert_one(doc)
+    return doc
+
+@api.get("/suppliers")
+async def list_suppliers(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    return await db.suppliers.find(q, {"_id": 0}).to_list(1000)
+
+@api.patch("/suppliers/{sid}")
+async def update_supplier(sid: str, request: Request, user: dict = Depends(get_current_user)):
+    body = await request.json()
+    target = await db.suppliers.find_one({"id": sid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, target['tenant_id'])
+    body.pop('id', None)
+    body.pop('tenant_id', None)
+    await db.suppliers.update_one({"id": sid}, {"$set": body})
+    return {"message": "Atualizado"}
+
+@api.delete("/suppliers/{sid}")
+async def delete_supplier(sid: str, user: dict = Depends(get_current_user)):
+    target = await db.suppliers.find_one({"id": sid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, target['tenant_id'])
+    await db.suppliers.delete_one({"id": sid})
+    return {"message": "Excluido"}
+
+# ═══════════════════════════════════════════════
+# INVOICES + OCR (Gemini)
+# ═══════════════════════════════════════════════
+
+@api.post("/invoices")
+async def create_invoice(data: InvoiceCreate, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": gen_id(), "tenant_id": tid, **data.model_dump(),
+        "items": [i.model_dump() for i in data.items],
+        "status": "pending", "type": "entrada", "created_at": now, "created_by": user['sub']
+    }
+    await db.invoices.insert_one(doc)
+    return doc
+
+@api.get("/invoices")
+async def list_invoices(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    return await db.invoices.find(q, {"_id": 0}).to_list(5000)
+
+@api.post("/invoices/{iid}/process-items")
+async def process_invoice_items(iid: str, user: dict = Depends(get_current_user)):
+    inv = await db.invoices.find_one({"id": iid}, {"_id": 0})
+    if not inv:
         raise HTTPException(status_code=404, detail="Nota nao encontrada")
+    if user['role'] != 'master':
+        await verify_tenant_access(user, inv['tenant_id'])
+    tid = inv['tenant_id']
     created = 0
-    updated = 0
-    for item in invoice_doc.get('items', []):
+    for item in inv.get('items', []):
         pname = item.get('product_name', '')
         if not pname:
             continue
         sku = item.get('product_sku', '') or pname[:10].upper().replace(' ', '')
         qty = item.get('quantity', 0)
-        existing = await db.products.find_one({"sku": sku}, {"_id": 0})
+        existing = await db.products.find_one({"sku": sku, "tenant_id": tid}, {"_id": 0})
+        now = datetime.now(timezone.utc).isoformat()
         if existing:
             new_avail = existing.get('available_qty', 0) + qty
             await db.products.update_one({"id": existing['id']}, {"$set": {"available_qty": new_avail}})
-            updated += 1
         else:
-            prod_doc = {
-                "id": str(uuid.uuid4()), "name": pname, "sku": sku, "description": "",
-                "category": "", "unit": "UN", "min_stock": 0,
-                "cost_price": item.get('unit_price', 0), "sale_price": item.get('unit_price', 0),
-                "available_qty": qty,
-                "active": True, "created_at": datetime.now(timezone.utc).isoformat(),
-                "created_by": current_user['user_id']
-            }
-            await db.products.insert_one(prod_doc)
+            await db.products.insert_one({
+                "id": gen_id(), "tenant_id": tid, "name": pname, "sku": sku,
+                "description": "", "category": "", "unit": "UN",
+                "cost_price": item.get('unit_price', 0), "min_stock": 0,
+                "available_qty": qty, "active": True, "created_at": now,
+                "created_by": user['sub']
+            })
             created += 1
-    await db.invoices.update_one({"id": invoice_id}, {"$set": {"status": "processed"}})
-    await audit_logger.log(current_user['user_id'], current_user['email'], "PROCESS", "invoice", invoice_id, {"produtos_criados": created, "produtos_atualizados": updated})
-    return {"message": f"Itens enviados para aba Produtos. {created} novos, {updated} atualizados. Transfira para o deposito desejado.", "products_created": created}
+    await db.invoices.update_one({"id": iid}, {"$set": {"status": "processed"}})
+    await audit.log(user['sub'], user['email'], "PROCESSAR", "nota_fiscal", iid, tid, {"produtos_criados": created})
+    return {"message": f"Itens enviados para Produtos. {created} novos criados.", "products_created": created}
 
-@api_router.post("/products/{product_id}/transfer")
-async def transfer_product_to_warehouse(product_id: str, warehouse_id: str, quantity: float, sector: str = "", current_user: dict = Depends(get_current_user)):
-    product = await db.products.find_one({"id": product_id}, {"_id": 0})
-    if not product:
-        raise HTTPException(status_code=404, detail="Produto nao encontrado")
-    warehouse = await db.warehouses.find_one({"id": warehouse_id}, {"_id": 0})
-    if not warehouse:
-        raise HTTPException(status_code=404, detail="Deposito nao encontrado")
-    
-    # Check if product has enough available quantity
-    current_stock = product.get('available_qty', quantity)
-    
-    # Add to inventory
-    inv_item = await db.inventory.find_one({"product_id": product_id, "warehouse_id": warehouse_id}, {"_id": 0})
-    if inv_item:
-        new_qty = inv_item['quantity'] + quantity
-        await db.inventory.update_one({"id": inv_item['id']}, {"$set": {"quantity": new_qty, "updated_at": datetime.now(timezone.utc).isoformat()}})
-    else:
-        await db.inventory.insert_one({
-            "id": str(uuid.uuid4()), "product_id": product_id, "warehouse_id": warehouse_id,
-            "quantity": quantity, "updated_at": datetime.now(timezone.utc).isoformat()
-        })
-    
-    # Reduce available_qty on product. If zero, delete the product from buffer
-    new_available = max(0, current_stock - quantity)
-    if new_available <= 0:
-        await db.products.delete_one({"id": product_id})
-        await audit_logger.log(current_user['user_id'], current_user['email'], "TRANSFER", "product", product_id, {"deposito": warehouse['name'], "setor": sector, "quantidade": quantity, "produto_removido": True})
-        return {"message": f"Transferido {quantity} unidades para {warehouse['name']}. Produto removido da aba produtos.", "removed": True}
-    else:
-        await db.products.update_one({"id": product_id}, {"$set": {"available_qty": new_available}})
-        await audit_logger.log(current_user['user_id'], current_user['email'], "TRANSFER", "product", product_id, {"deposito": warehouse['name'], "setor": sector, "quantidade": quantity, "restante": new_available})
-        return {"message": f"Transferido {quantity} unidades para {warehouse['name']}. Restam {new_available} na aba produtos.", "removed": False}
+@api.post("/invoices/ocr")
+async def ocr_invoice(data: OCRRequest, user: dict = Depends(get_current_user)):
+    import google.generativeai as genai
+    api_key = os.environ.get('GEMINI_API_KEY')
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY nao configurada")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = """Analise esta nota fiscal brasileira. Extraia com PRECISAO:
+- QUANTIDADE = numero de unidades (NAO confunda com codigo)
+- VALOR UNITARIO = preco de 1 unidade
+Retorne SOMENTE JSON:
+{"invoice_number":"","supplier_name":"","issue_date":"YYYY-MM-DD","total_value":0,"tax_value":0,"items":[{"product_name":"","product_sku":"","quantity":0,"unit_price":0,"total":0}]}"""
+    import base64 as b64mod
+    img_bytes = b64mod.b64decode(data.image_base64)
+    response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_bytes}])
+    txt = response.text.strip()
+    if txt.startswith('```json'):
+        txt = txt[7:]
+    if txt.startswith('```'):
+        txt = txt[3:]
+    if txt.endswith('```'):
+        txt = txt[:-3]
+    return json.loads(txt.strip())
 
-@api_router.get("/audit", response_model=List[AuditLog])
-async def get_audit_logs(current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    
-    logs = await db.audit_logs.find({}, {"_id": 0}).sort('timestamp', -1).to_list(1000)
-    for log in logs:
-        log['timestamp'] = datetime.fromisoformat(log['timestamp'])
-    return [AuditLog(**log) for log in logs]
-
-# === EDIT ENDPOINTS ===
-
-@api_router.patch("/products/{product_id}", response_model=Product)
-async def update_product(product_id: str, updates: ProductUpdate, current_user: dict = Depends(get_current_user)):
-    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.products.update_one({"id": product_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Product not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "UPDATE", "product", product_id, update_data)
-    doc = await db.products.find_one({"id": product_id}, {"_id": 0})
-    doc['created_at'] = datetime.fromisoformat(doc['created_at'])
-    return Product(**doc)
-
-@api_router.delete("/products/{product_id}")
-async def delete_product(product_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.products.delete_one({"id": product_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Product not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "DELETE", "product", product_id)
-    return {"message": "Product deleted"}
-
-@api_router.patch("/suppliers/{supplier_id}", response_model=Supplier)
-async def update_supplier(supplier_id: str, updates: SupplierUpdate, current_user: dict = Depends(get_current_user)):
-    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.suppliers.update_one({"id": supplier_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "UPDATE", "supplier", supplier_id, update_data)
-    doc = await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
-    doc['created_at'] = datetime.fromisoformat(doc['created_at'])
-    return Supplier(**doc)
-
-@api_router.delete("/suppliers/{supplier_id}")
-async def delete_supplier(supplier_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.suppliers.delete_one({"id": supplier_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "DELETE", "supplier", supplier_id)
-    return {"message": "Supplier deleted"}
-
-@api_router.patch("/warehouses/{warehouse_id}", response_model=Warehouse)
-async def update_warehouse(warehouse_id: str, updates: WarehouseUpdate, current_user: dict = Depends(get_current_user)):
-    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.warehouses.update_one({"id": warehouse_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Warehouse not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "UPDATE", "warehouse", warehouse_id, update_data)
-    doc = await db.warehouses.find_one({"id": warehouse_id}, {"_id": 0})
-    doc['created_at'] = datetime.fromisoformat(doc['created_at'])
-    return Warehouse(**doc)
-
-@api_router.delete("/warehouses/{warehouse_id}")
-async def delete_warehouse(warehouse_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.warehouses.delete_one({"id": warehouse_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Warehouse not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "DELETE", "warehouse", warehouse_id)
-    return {"message": "Warehouse deleted"}
-
-@api_router.delete("/users/{user_id}")
-async def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev"])
-    if user_id == current_user['user_id']:
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    result = await db.users.delete_one({"id": user_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    await audit_logger.log(current_user['user_id'], current_user['email'], "DELETE", "user", user_id)
-    return {"message": "User deleted"}
-
-# === ALERT CONFIG ENDPOINTS ===
-
-@api_router.get("/alerts/config", response_model=List[AlertConfig])
-async def get_alert_configs(current_user: dict = Depends(get_current_user)):
-    configs = await db.alert_configs.find({"user_id": current_user['user_id']}, {"_id": 0}).to_list(100)
-    for c in configs:
-        c['created_at'] = datetime.fromisoformat(c['created_at'])
-    return [AlertConfig(**c) for c in configs]
-
-@api_router.post("/alerts/config", response_model=AlertConfig)
-async def create_alert_config(config_data: AlertConfigCreate, current_user: dict = Depends(get_current_user)):
-    config = AlertConfig(
-        **config_data.model_dump(),
-        user_id=current_user['user_id'],
-        created_at=datetime.now(timezone.utc)
-    )
-    doc = config.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.alert_configs.insert_one(doc)
-    await audit_logger.log(current_user['user_id'], current_user['email'], "CREATE", "alert_config", config.id)
-    return config
-
-@api_router.patch("/alerts/config/{config_id}")
-async def update_alert_config(config_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
-    updates.pop('id', None)
-    updates.pop('user_id', None)
-    updates.pop('created_at', None)
-    result = await db.alert_configs.update_one(
-        {"id": config_id, "user_id": current_user['user_id']},
-        {"$set": updates}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Alert config not found")
-    return {"message": "Alert config updated"}
-
-@api_router.delete("/alerts/config/{config_id}")
-async def delete_alert_config(config_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.alert_configs.delete_one({"id": config_id, "user_id": current_user['user_id']})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Alert config not found")
-    return {"message": "Alert config deleted"}
-
-# === NOTIFICATION ENDPOINTS ===
-
-@api_router.get("/notifications")
-async def get_notifications(current_user: dict = Depends(get_current_user)):
-    notifs = await db.notifications.find(
-        {"user_id": current_user['user_id']},
-        {"_id": 0}
-    ).sort('created_at', -1).to_list(100)
-    for n in notifs:
-        n['created_at'] = datetime.fromisoformat(n['created_at'])
-    return [Notification(**n) for n in notifs]
-
-@api_router.get("/notifications/unread-count")
-async def get_unread_count(current_user: dict = Depends(get_current_user)):
-    count = await db.notifications.count_documents({"user_id": current_user['user_id'], "read": False})
-    return {"count": count}
-
-@api_router.patch("/notifications/{notification_id}/read")
-async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
-    await db.notifications.update_one(
-        {"id": notification_id, "user_id": current_user['user_id']},
-        {"$set": {"read": True}}
-    )
-    return {"message": "Notification marked as read"}
-
-@api_router.post("/notifications/read-all")
-async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
-    await db.notifications.update_many(
-        {"user_id": current_user['user_id'], "read": False},
-        {"$set": {"read": True}}
-    )
-    return {"message": "All notifications marked as read"}
-
-@api_router.post("/notifications/send")
-async def send_notification(notif_data: NotificationCreate, current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    notif = Notification(
-        **notif_data.model_dump(),
-        created_at=datetime.now(timezone.utc)
-    )
-    doc = notif.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.notifications.insert_one(doc)
-    return notif
-
-# === CHECK AND TRIGGER STOCK ALERTS ===
-
-@api_router.post("/alerts/check-stock")
-async def check_and_send_stock_alerts(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    await require_role(current_user, ["dev", "master"])
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    alerts_sent = 0
-    for item in inventory:
-        product = await db.products.find_one({"id": item['product_id']}, {"_id": 0})
-        warehouse = await db.warehouses.find_one({"id": item['warehouse_id']}, {"_id": 0})
-        if product and warehouse and item['quantity'] <= product.get('min_stock', 0):
-            configs = await db.alert_configs.find({"alert_type": "stock_low", "active": True}, {"_id": 0}).to_list(100)
-            for config in configs:
-                if config.get('internal_enabled', True):
-                    notif = {
-                        "id": str(uuid.uuid4()),
-                        "user_id": config['user_id'],
-                        "title": "Alerta de Estoque Baixo",
-                        "message": f"Produto '{product['name']}' no deposito '{warehouse['name']}' com {item['quantity']} unidades (minimo: {product.get('min_stock', 0)})",
-                        "type": "warning",
-                        "read": False,
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    await db.notifications.insert_one(notif)
-                    alerts_sent += 1
-                if config.get('email_enabled') and config.get('email_address'):
-                    subject, html = build_stock_alert_email(product['name'], warehouse['name'], item['quantity'], product.get('min_stock', 0))
-                    background_tasks.add_task(send_email, config['email_address'], subject, html)
-                if config.get('mobile_enabled') and config.get('phone_number'):
-                    sms_log = {
-                        "id": str(uuid.uuid4()),
-                        "phone": config['phone_number'],
-                        "message": f"[Gestao TJ] Estoque baixo: {product['name']} ({item['quantity']}/{product.get('min_stock', 0)}) em {warehouse['name']}",
-                        "status": "simulated",
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    await db.sms_logs.insert_one(sms_log)
-    return {"message": f"{alerts_sent} alerts sent"}
-
-# === FILE UPLOAD FOR INVOICES ===
-
-@api_router.post("/invoices/upload")
-async def upload_invoice_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-    
+@api.post("/invoices/upload")
+async def upload_invoice(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     content = await file.read()
-    filename_lower = file.filename.lower()
-    
-    if filename_lower.endswith('.xml'):
-        try:
-            parsed = parse_nfe_xml(content)
-            return {"source": "xml", "data": parsed}
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    
-    elif filename_lower.endswith('.pdf'):
-        try:
-            api_key = os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                raise HTTPException(status_code=500, detail="OPENAI_API_KEY nao configurada no .env")
-            
-            b64 = base64.b64encode(content).decode('utf-8')
-            client_ai = OpenAI(api_key=api_key)
-            
-            prompt_text = 'Analise esta nota fiscal brasileira com EXTREMA ATENCAO aos numeros. A QUANTIDADE e o numero de unidades compradas (nao confunda com codigo). O VALOR UNITARIO e o preco de 1 unidade. Retorne SOMENTE JSON: {"invoice_number": "numero", "supplier_name": "fornecedor", "supplier_cnpj": "", "issue_date": "YYYY-MM-DD", "total_value": 0.0, "tax_value": 0.0, "items": [{"product_name": "descricao", "product_sku": "codigo", "quantity": 0.0, "unit_price": 0.0, "total": 0.0, "tax": 0}]}. Retorne SOMENTE JSON.'
-            
-            response = client_ai.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "Voce e um especialista em extrair dados de notas fiscais brasileiras."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": prompt_text},
-                        {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{b64}"}}
-                    ]}
-                ],
-                max_tokens=4000,
-                temperature=0
-            )
-            
-            response_text = response.choices[0].message.content.strip()
-            if response_text.startswith('```json'):
-                response_text = response_text[7:]
-            if response_text.startswith('```'):
-                response_text = response_text[3:]
-            if response_text.endswith('```'):
-                response_text = response_text[:-3]
-            
-            extracted = json.loads(response_text.strip())
-            return {"source": "pdf_ocr", "data": extracted}
-        except Exception as e:
-            logger.error(f"PDF parsing error: {e}")
-            raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Use PDF or XML.")
+    fname = (file.filename or '').lower()
+    if fname.endswith('.xml'):
+        parsed = parse_nfe_xml(content)
+        return {"source": "xml", "data": parsed}
+    elif fname.endswith('.pdf') or fname.endswith('.jpg') or fname.endswith('.jpeg') or fname.endswith('.png'):
+        import google.generativeai as genai
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GEMINI_API_KEY nao configurada")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        prompt = 'Analise esta nota fiscal brasileira. QUANTIDADE = unidades compradas. Retorne SOMENTE JSON: {"invoice_number":"","supplier_name":"","issue_date":"YYYY-MM-DD","total_value":0,"tax_value":0,"items":[{"product_name":"","product_sku":"","quantity":0,"unit_price":0,"total":0}]}'
+        mime = "application/pdf" if fname.endswith('.pdf') else "image/jpeg"
+        response = model.generate_content([prompt, {"mime_type": mime, "data": content}])
+        txt = response.text.strip()
+        if txt.startswith('```json'):
+            txt = txt[7:]
+        if txt.startswith('```'):
+            txt = txt[3:]
+        if txt.endswith('```'):
+            txt = txt[:-3]
+        return {"source": "ocr", "data": json.loads(txt.strip())}
+    raise HTTPException(status_code=400, detail="Use PDF, XML, JPG ou PNG")
 
-# === REPORT EXPORT ENDPOINTS ===
+# ═══════════════════════════════════════════════
+# SALES
+# ═══════════════════════════════════════════════
 
-@api_router.get("/reports/export/pdf")
-async def export_financial_pdf(period: str, current_user: dict = Depends(get_current_user)):
-    # Build report data
+@api.post("/sales")
+async def create_sale(data: SaleCreate, user: dict = Depends(get_current_user)):
+    tid = user.get('tenant_id', '')
+    now = datetime.now(timezone.utc).isoformat()
+    last = await db.sales.find_one({"tenant_id": tid}, {"_id": 0}, sort=[('created_at', -1)])
+    num = 1
+    if last and 'sale_number' in last:
+        try:
+            num = int(last['sale_number'][3:]) + 1
+        except ValueError:
+            pass
+    doc = {
+        "id": gen_id(), "tenant_id": tid, "sale_number": f"VND{str(num).zfill(6)}",
+        "warehouse_id": data.warehouse_id, "customer_name": data.customer_name or "",
+        "items": [i.model_dump() for i in data.items],
+        "subtotal": data.subtotal, "discount": data.discount, "total": data.total,
+        "payment_method": data.payment_method or "", "status": "completed",
+        "created_at": now, "created_by": user['sub']
+    }
+    await db.sales.insert_one(doc)
+    for item in data.items:
+        inv = await db.inventory.find_one({"product_id": item.product_id, "warehouse_id": data.warehouse_id}, {"_id": 0})
+        if inv:
+            new_qty = max(0, inv['quantity'] - item.quantity)
+            await db.inventory.update_one({"id": inv['id']}, {"$set": {"quantity": new_qty, "updated_at": now}})
+    await audit.log(user['sub'], user['email'], "CRIAR", "venda", doc['id'], tid)
+    return doc
+
+@api.get("/sales")
+async def list_sales(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    return await db.sales.find(q, {"_id": 0}).sort('created_at', -1).to_list(5000)
+
+# ═══════════════════════════════════════════════
+# DASHBOARD / REPORTS / AUDIT / NOTIFICATIONS
+# ═══════════════════════════════════════════════
+
+@api.get("/dashboard/stats")
+async def dashboard_stats(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    prods = await db.products.count_documents({**q, "active": True})
+    suppliers = await db.suppliers.count_documents({**q, "active": True})
+    whs = await db.warehouses.count_documents({**q, "active": True})
+    pending = await db.invoices.count_documents({**q, "status": "pending"})
+    pending_reqs = await db.requisitions.count_documents({**q, "status": "pending"})
+    inv = await db.inventory.find(q, {"_id": 0}).to_list(5000)
+    low = 0
+    for it in inv:
+        p = await db.products.find_one({"id": it['product_id']}, {"_id": 0})
+        if p and p.get('min_stock', 0) > 0 and it['quantity'] <= p['min_stock']:
+            low += 1
+    return {
+        "total_products": prods, "total_suppliers": suppliers, "total_warehouses": whs,
+        "pending_invoices": pending, "pending_requisitions": pending_reqs,
+        "low_stock_alerts": low
+    }
+
+@api.get("/dashboard/alerts")
+async def dashboard_alerts(user: dict = Depends(get_current_user)):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    inv = await db.inventory.find(q, {"_id": 0}).to_list(5000)
+    alerts = []
+    for it in inv:
+        p = await db.products.find_one({"id": it['product_id']}, {"_id": 0})
+        w = await db.warehouses.find_one({"id": it['warehouse_id']}, {"_id": 0})
+        if p and w and p.get('min_stock', 0) > 0 and it['quantity'] <= p['min_stock']:
+            alerts.append({"product_name": p['name'], "warehouse_name": w['name'], "current_quantity": it['quantity'], "min_stock": p['min_stock']})
+    return alerts
+
+@api.get("/reports/financial")
+async def financial_report(period: str, user: dict = Depends(require_roles("master", "admin"))):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
     if period == "month":
-        start_date = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0).isoformat()
-        period_label = "Mes Atual"
+        start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0).isoformat()
     else:
-        start_date = datetime.now(timezone.utc).replace(month=1, day=1, hour=0, minute=0, second=0).isoformat()
-        period_label = "Ano Atual"
-    
-    sales = await db.sales.find({"created_at": {"$gte": start_date}, "status": "completed"}, {"_id": 0}).to_list(10000)
+        start = datetime.now(timezone.utc).replace(month=1, day=1, hour=0, minute=0, second=0).isoformat()
+    sales = await db.sales.find({**q, "created_at": {"$gte": start}, "status": "completed"}, {"_id": 0}).to_list(10000)
     revenue = sum(s.get('total', 0) for s in sales)
     cost = 0
-    for sale in sales:
-        for item in sale.get('items', []):
-            product = await db.products.find_one({"id": item.get('product_id')}, {"_id": 0})
-            if product:
-                cost += product.get('cost_price', 0) * item.get('quantity', 0)
-    
-    gross_profit = revenue - cost
-    profit_margin = (gross_profit / revenue * 100) if revenue > 0 else 0
-    
-    invoices = await db.invoices.find({"created_at": {"$gte": start_date}, "type": "entrada"}, {"_id": 0}).to_list(10000)
-    outflows = sum(inv.get('total_value', 0) for inv in invoices)
-    
-    report_data = {
-        "revenue": revenue, "cost": cost, "gross_profit": gross_profit,
-        "profit_margin": profit_margin, "expenses": 0, "net_profit": gross_profit,
-        "cash_flow": {"inflows": revenue, "outflows": outflows, "balance": revenue - outflows}
-    }
-    
-    pdf_bytes = generate_financial_pdf(report_data, period_label)
-    return Response(content=pdf_bytes, media_type="application/pdf",
-                    headers={"Content-Disposition": f"attachment; filename=relatorio_{period}.pdf"})
+    for s in sales:
+        for it in s.get('items', []):
+            p = await db.products.find_one({"id": it.get('product_id')}, {"_id": 0})
+            if p:
+                cost += p.get('cost_price', 0) * it.get('quantity', 0)
+    gp = revenue - cost
+    margin = (gp / revenue * 100) if revenue > 0 else 0
+    return {"period": period, "revenue": revenue, "cost": cost, "gross_profit": gp, "profit_margin": margin, "expenses": 0, "net_profit": gp}
 
-@api_router.get("/reports/export/excel")
-async def export_financial_excel(period: str, current_user: dict = Depends(get_current_user)):
-    if period == "month":
-        start_date = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0).isoformat()
-        period_label = "Mes Atual"
-    else:
-        start_date = datetime.now(timezone.utc).replace(month=1, day=1, hour=0, minute=0, second=0).isoformat()
-        period_label = "Ano Atual"
-    
-    sales = await db.sales.find({"created_at": {"$gte": start_date}, "status": "completed"}, {"_id": 0}).to_list(10000)
-    revenue = sum(s.get('total', 0) for s in sales)
-    cost = 0
-    for sale in sales:
-        for item in sale.get('items', []):
-            product = await db.products.find_one({"id": item.get('product_id')}, {"_id": 0})
-            if product:
-                cost += product.get('cost_price', 0) * item.get('quantity', 0)
-    
-    gross_profit = revenue - cost
-    profit_margin = (gross_profit / revenue * 100) if revenue > 0 else 0
-    
-    invoices = await db.invoices.find({"created_at": {"$gte": start_date}, "type": "entrada"}, {"_id": 0}).to_list(10000)
-    outflows = sum(inv.get('total_value', 0) for inv in invoices)
-    
-    report_data = {
-        "revenue": revenue, "cost": cost, "gross_profit": gross_profit,
-        "profit_margin": profit_margin, "expenses": 0, "net_profit": gross_profit,
-        "cash_flow": {"inflows": revenue, "outflows": outflows, "balance": revenue - outflows}
-    }
-    
-    excel_bytes = generate_financial_excel(report_data, period_label)
-    return Response(content=excel_bytes,
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f"attachment; filename=relatorio_{period}.xlsx"})
+@api.get("/reports/abc-curve")
+async def abc_curve(user: dict = Depends(require_roles("master", "admin"))):
+    q = {"status": "completed"}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    sales = await db.sales.find(q, {"_id": 0}).to_list(10000)
+    pm = {}
+    for s in sales:
+        for it in s.get('items', []):
+            pid = it.get('product_id', '')
+            pm.setdefault(pid, {"product_name": it.get('product_name', ''), "revenue": 0, "quantity": 0})
+            pm[pid]['revenue'] += it.get('total', 0)
+            pm[pid]['quantity'] += it.get('quantity', 0)
+    items = sorted(pm.values(), key=lambda x: x['revenue'], reverse=True)
+    total = sum(i['revenue'] for i in items)
+    cum = 0
+    for i in items:
+        cum += i['revenue']
+        pct = (cum / total * 100) if total > 0 else 0
+        i['percentage'] = round(i['revenue'] / total * 100, 1) if total > 0 else 0
+        i['cumulative'] = round(pct, 1)
+        i['class'] = 'A' if pct <= 80 else ('B' if pct <= 95 else 'C')
+    return {"items": items, "total_revenue": total}
 
-@api_router.post("/seed")
-async def seed_database():
-    existing_admin = await db.users.find_one({"email": "admin@gestaotj.com"}, {"_id": 0})
-    
-    if existing_admin:
-        return {"message": "Database already seeded"}
-    
+@api.get("/reports/inventory-turnover")
+async def inventory_turnover(user: dict = Depends(require_roles("master", "admin"))):
+    pq = {"active": True}
+    sq = {"status": "completed"}
+    if user['role'] != 'master':
+        pq['tenant_id'] = user.get('tenant_id', '')
+        sq['tenant_id'] = user.get('tenant_id', '')
+    products = await db.products.find(pq, {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(sq, {"_id": 0}).to_list(10000)
+    ps = {}
+    for s in sales:
+        for it in s.get('items', []):
+            ps[it.get('product_id', '')] = ps.get(it.get('product_id', ''), 0) + it.get('quantity', 0)
+    inv_q = {}
+    if user['role'] != 'master':
+        inv_q['tenant_id'] = user.get('tenant_id', '')
+    inv_items = await db.inventory.find(inv_q, {"_id": 0}).to_list(5000)
+    pstock = {}
+    for i in inv_items:
+        pstock[i['product_id']] = pstock.get(i['product_id'], 0) + i['quantity']
+    results = []
+    for p in products:
+        sold = ps.get(p['id'], 0)
+        stock = pstock.get(p['id'], 0)
+        avg = stock if stock > 0 else 1
+        turn = round(sold / avg, 2)
+        days = round(avg / (sold / 30), 0) if sold > 0 else 999
+        results.append({"product_name": p['name'], "sku": p['sku'], "total_sold": sold, "current_stock": stock, "turnover_rate": turn, "days_of_coverage": min(days, 999), "status": 'critico' if days < 7 else 'baixo' if days < 15 else 'normal' if days < 60 else 'excesso'})
+    return {"items": sorted(results, key=lambda x: x['turnover_rate'], reverse=True)}
+
+@api.get("/reports/export/pdf")
+async def export_pdf(period: str, user: dict = Depends(require_roles("master", "admin"))):
+    report = await financial_report(period, user)
+    pdf = generate_financial_pdf(report, "Mes Atual" if period == "month" else "Ano Atual")
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=relatorio_{period}.pdf"})
+
+@api.get("/reports/export/excel")
+async def export_excel(period: str, user: dict = Depends(require_roles("master", "admin"))):
+    report = await financial_report(period, user)
+    excel = generate_financial_excel(report, "Mes Atual" if period == "month" else "Ano Atual")
+    return Response(content=excel, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=relatorio_{period}.xlsx"})
+
+@api.get("/audit")
+async def list_audit(user: dict = Depends(require_roles("master", "admin"))):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    return await db.audit_logs.find(q, {"_id": 0}).sort('timestamp', -1).to_list(1000)
+
+@api.get("/audit/export")
+async def export_audit(user: dict = Depends(require_roles("master", "admin"))):
+    q = {}
+    if user['role'] != 'master':
+        q['tenant_id'] = user.get('tenant_id', '')
+    logs = await db.audit_logs.find(q, {"_id": 0}).sort('timestamp', -1).to_list(10000)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    import io
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Auditoria"
+    for i, h in enumerate(['Data', 'Usuario', 'Acao', 'Entidade', 'ID', 'Detalhes'], 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = Font(bold=True, color='FFFFFF')
+        c.fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+    for r, l in enumerate(logs, 2):
+        ws.cell(row=r, column=1, value=l.get('timestamp', ''))
+        ws.cell(row=r, column=2, value=l.get('user_email', ''))
+        ws.cell(row=r, column=3, value=l.get('action', ''))
+        ws.cell(row=r, column=4, value=l.get('entity_type', ''))
+        ws.cell(row=r, column=5, value=l.get('entity_id', ''))
+        ws.cell(row=r, column=6, value=str(l.get('changes', '') or ''))
+    for col in 'ABCDEF':
+        ws.column_dimensions[col].width = 22
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=auditoria.xlsx"})
+
+@api.get("/notifications")
+async def list_notifications(user: dict = Depends(get_current_user)):
+    q = {"user_id": user['sub']}
+    return await db.notifications.find(q, {"_id": 0}).sort('created_at', -1).to_list(100)
+
+@api.get("/notifications/unread-count")
+async def unread_count(user: dict = Depends(get_current_user)):
+    c = await db.notifications.count_documents({"user_id": user['sub'], "read": False})
+    return {"count": c}
+
+@api.patch("/notifications/{nid}/read")
+async def mark_read(nid: str, user: dict = Depends(get_current_user)):
+    await db.notifications.update_one({"id": nid, "user_id": user['sub']}, {"$set": {"read": True}})
+    return {"message": "Lida"}
+
+@api.post("/notifications/read-all")
+async def read_all(user: dict = Depends(get_current_user)):
+    await db.notifications.update_many({"user_id": user['sub'], "read": False}, {"$set": {"read": True}})
+    return {"message": "Todas lidas"}
+
+# ═══════════════════════════════════════════════
+# SEED
+# ═══════════════════════════════════════════════
+
+@api.post("/seed")
+async def seed():
+    existing = await db.users.find_one({"email": "admin@gestaotj.com"}, {"_id": 0})
+    if existing:
+        return {"message": "Ja inicializado"}
+    now = datetime.now(timezone.utc).isoformat()
+    tenant = {"id": gen_id(), "name": "TJ Principal", "slug": "tj", "active": True, "created_at": now}
+    await db.tenants.insert_one(tenant)
     users = [
-        {
-            "id": str(uuid.uuid4()),
-            "email": "admin@gestaotj.com",
-            "name": "Administrador",
-            "role": "dev",
-            "active": True,
-            "password_hash": hash_password("Admin@123456"),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "email": "gerente@gestaotj.com",
-            "name": "Gerente",
-            "role": "master",
-            "active": True,
-            "password_hash": hash_password("Gerente@123"),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "email": "usuario@gestaotj.com",
-            "name": "Usuário",
-            "role": "usuario",
-            "active": True,
-            "password_hash": hash_password("Usuario@123"),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
+        {"id": gen_id(), "email": "admin@gestaotj.com", "name": "Administrador", "role": "master", "tenant_id": "", "warehouse_id": "", "password_hash": hash_password("Admin@123456"), "active": True, "created_at": now},
+        {"id": gen_id(), "email": "gerente@gestaotj.com", "name": "Gerente", "role": "admin", "tenant_id": tenant['id'], "warehouse_id": "", "password_hash": hash_password("Gerente@123"), "active": True, "created_at": now},
+        {"id": gen_id(), "email": "usuario@gestaotj.com", "name": "Usuario", "role": "logistica", "tenant_id": tenant['id'], "warehouse_id": "", "password_hash": hash_password("Usuario@123"), "active": True, "created_at": now},
     ]
-    
     await db.users.insert_many(users)
-    
-    return {"message": "Database seeded successfully"}
+    await db.users.create_index("email", unique=True)
+    return {"message": "Sistema inicializado", "tenant_id": tenant['id']}
 
-app.include_router(api_router)
+# ═══════════════════════════════════════════════
+# APP SETUP
+# ═══════════════════════════════════════════════
 
+app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1084,5 +844,5 @@ app.add_middleware(
 )
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown():
     client.close()

@@ -3,31 +3,37 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import os
+import secrets
 
-JWT_SECRET = os.environ.get('JWT_SECRET', 'default_secret_key')
+JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_hex(32))
 JWT_ALGORITHM = 'HS256'
-JWT_EXPIRATION_HOURS = 24
+ACCESS_TOKEN_EXPIRE = 15  # minutes
+REFRESH_TOKEN_EXPIRE = 7  # days
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Verify a password against a hash"""
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_token(user_id: str, email: str, role: str) -> str:
-    """Create a JWT token"""
+def create_access_token(user_id: str, email: str, role: str, tenant_id: str = None) -> str:
     payload = {
-        'user_id': user_id,
-        'email': email,
-        'role': role,
-        'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+        'sub': user_id, 'email': email, 'role': role,
+        'tenant_id': tenant_id or '',
+        'type': 'access',
+        'exp': datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def create_refresh_token(user_id: str) -> str:
+    payload = {
+        'sub': user_id,
+        'type': 'refresh',
+        'exp': datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def decode_token(token: str) -> Optional[dict]:
-    """Decode and validate a JWT token"""
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.InvalidTokenError:
