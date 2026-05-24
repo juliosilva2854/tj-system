@@ -14,7 +14,37 @@ def sanitize_str(v: str, max_len: int = 500) -> str:
     v = re.sub(r'[<>{}]', '', v)
     return v[:max_len]
 
-# === TENANT ===
+# Roles canonicas (mantemos legados para compat)
+ROLES = Literal[
+    "master",
+    "admin",
+    "gerente_geral",
+    "gerente_logistica",
+    "gerente_operacional",
+    "logistica",
+    "operacional",
+]
+
+# Modulos do sistema (= menus do frontend)
+ALL_MODULES = [
+    "dashboard",
+    "stores",
+    "warehouses",
+    "products",
+    "inventory",
+    "requisitions",
+    "transfers",
+    "invoices",
+    "suppliers",
+    "sales",
+    "reports",
+    "alerts",
+    "audit",
+    "users",
+    "guide",
+]
+
+# === TENANT (estabelecimento / empresa, ex: Arcos Dourados) ===
 class TenantCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     slug: str = Field(..., min_length=2, max_length=50, pattern=r'^[a-z0-9\-]+$')
@@ -31,14 +61,39 @@ class Tenant(BaseModel):
     active: bool = True
     created_at: str
 
+# === STORE / UNIDADE / LOJA (ex: Restaurante A, Restaurante B) ===
+class StoreCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+    code: Optional[str] = Field(None, max_length=20)
+    address: Optional[str] = Field(None, max_length=300)
+    @field_validator('name', 'code', 'address')
+    @classmethod
+    def sanitize(cls, v):
+        if v:
+            return sanitize_str(v, 300)
+        return v
+
+class Store(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=gen_id)
+    tenant_id: str
+    name: str
+    code: Optional[str] = None
+    address: Optional[str] = None
+    active: bool = True
+    created_at: str
+    created_by: Optional[str] = None
+
 # === USER ===
 class UserCreate(BaseModel):
     email: str = Field(..., max_length=200)
     name: str = Field(..., min_length=2, max_length=100)
     password: str = Field(..., min_length=6, max_length=128)
-    role: Literal["master", "admin", "logistica", "operacional"]
+    role: ROLES
     tenant_id: Optional[str] = None
-    warehouse_id: Optional[str] = None
+    warehouse_id: Optional[str] = None  # legado / unico
+    warehouse_ids: List[str] = []  # multi-warehouse
+    store_ids: List[str] = []  # acesso por loja inteira
     @field_validator('email')
     @classmethod
     def validate_email(cls, v):
@@ -62,6 +117,8 @@ class UserOut(BaseModel):
     role: str
     tenant_id: Optional[str] = None
     warehouse_id: Optional[str] = None
+    warehouse_ids: List[str] = []
+    store_ids: List[str] = []
     active: bool = True
     created_at: str
 
@@ -72,7 +129,9 @@ class WarehouseCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     type: Literal["pai", "filho"]
     parent_id: Optional[str] = None
+    store_id: Optional[str] = None  # vinculo a loja
     sectors: List[str] = []
+    enabled_modules: Optional[List[str]] = None  # so para PAI; default = todos
     @field_validator('name', 'location')
     @classmethod
     def sanitize(cls, v):
@@ -82,15 +141,27 @@ class Warehouse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=gen_id)
     tenant_id: str
+    store_id: Optional[str] = None
     name: str
     location: str
     description: Optional[str] = None
     type: Literal["pai", "filho"]
     parent_id: Optional[str] = None
     sectors: List[str] = []
+    enabled_modules: List[str] = []
     active: bool = True
     created_at: str
     created_by: str
+
+class ModuleConfigUpdate(BaseModel):
+    enabled_modules: List[str]
+    @field_validator('enabled_modules')
+    @classmethod
+    def validate_modules(cls, v):
+        invalid = [m for m in v if m not in ALL_MODULES]
+        if invalid:
+            raise ValueError(f"Modulos invalidos: {invalid}")
+        return v
 
 # === PRODUCT ===
 class ProductCreate(BaseModel):
@@ -124,6 +195,14 @@ class Product(BaseModel):
     created_at: str
     created_by: str
 
+# === INVENTORY adjust ===
+class InventoryAdjust(BaseModel):
+    product_id: str
+    warehouse_id: str
+    quantity: float  # delta (pode ser negativo)
+    sector: Optional[str] = Field(None, max_length=100)
+    reason: Optional[str] = Field(None, max_length=200)
+
 # === INVOICE ===
 class InvoiceItemInput(BaseModel):
     product_name: str = Field(..., max_length=200)
@@ -139,6 +218,7 @@ class InvoiceCreate(BaseModel):
     issue_date: str = Field(..., max_length=10)
     total_value: float = Field(..., ge=0)
     tax_value: float = Field(default=0, ge=0)
+    warehouse_id: Optional[str] = None  # PAI destino dos itens
     items: List[InvoiceItemInput] = []
     @field_validator('invoice_number', 'supplier_name')
     @classmethod
@@ -149,6 +229,7 @@ class Invoice(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=gen_id)
     tenant_id: str
+    warehouse_id: Optional[str] = None
     invoice_number: str
     supplier_name: str
     issue_date: str
@@ -160,7 +241,7 @@ class Invoice(BaseModel):
     created_at: str
     created_by: str
 
-# === REQUISITION (FILHO -> PAI) ===
+# === REQUISITION (FILHO -> PAI, mesma loja) ===
 class RequisitionItemInput(BaseModel):
     product_id: str
     product_name: str = Field(..., max_length=200)
@@ -179,6 +260,34 @@ class Requisition(BaseModel):
     items: list
     notes: Optional[str] = None
     status: Literal["pending", "approved", "rejected"] = "pending"
+    created_at: str
+    created_by: str
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
+
+# === TRANSFER entre LOJAS (PAI -> PAI, dentro do mesmo tenant) ===
+class TransferItemInput(BaseModel):
+    product_id: str
+    product_name: str = Field(..., max_length=200)
+    quantity: float = Field(..., gt=0)
+
+class TransferCreate(BaseModel):
+    from_warehouse_id: str  # PAI origem
+    to_warehouse_id: str    # PAI destino
+    items: List[TransferItemInput]
+    notes: Optional[str] = Field(None, max_length=500)
+
+class Transfer(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=gen_id)
+    tenant_id: str
+    from_store_id: Optional[str] = None
+    to_store_id: Optional[str] = None
+    from_warehouse_id: str
+    to_warehouse_id: str
+    items: list
+    notes: Optional[str] = None
+    status: Literal["pending", "completed", "rejected"] = "pending"
     created_at: str
     created_by: str
     resolved_at: Optional[str] = None

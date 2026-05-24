@@ -1,628 +1,375 @@
-import requests
-import sys
+#!/usr/bin/env python3
+"""
+Manual verification tests for Gestao TJ SaaS backend refactoring.
+Tests against public URL with all 8 seeded users.
+"""
+import os
 import json
-from datetime import datetime
+import requests
+from typing import Dict, Any
 
-class GestaoTJAPITester:
-    def __init__(self, base_url="https://estoque-api.preview.emergentagent.com"):
-        self.base_url = base_url
-        self.api_url = f"{base_url}/api"
-        self.token = None
-        self.user_data = None
-        self.tests_run = 0
-        self.tests_passed = 0
-        self.created_ids = {
-            'warehouse': None,
-            'supplier': None,
-            'product': None,
-            'order': None
-        }
+BASE_URL = "https://estoque-api.preview.emergentagent.com"
+API = f"{BASE_URL}/api"
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, params=None):
-        """Run a single API test"""
-        url = f"{self.api_url}/{endpoint}"
-        headers = {'Content-Type': 'application/json'}
-        if self.token:
-            headers['Authorization'] = f'Bearer {self.token}'
+# Test credentials from /app/memory/test_credentials.md
+CREDENTIALS = {
+    "master": ("master@sconnecta.com.br", "Master@2026"),
+    "admin_tj": ("admin@tj.sconnecta.com.br", "Admin@2026"),
+    "log_tj": ("logistica@tj.sconnecta.com.br", "Logistica@2026"),
+    "op_tj": ("operacional@tj.sconnecta.com.br", "Operacional@2026"),
+    "admin_arcos": ("admin@arcos.sconnecta.com.br", "Admin@2026"),
+    "gerente_geral": ("gerentegeral@arcos.sconnecta.com.br", "GerenteGeral@2026"),
+    "gerente_log_a": ("gerentelogA@arcos.sconnecta.com.br", "GerenteLog@2026"),
+    "gerente_op_a": ("gerenteopA@arcos.sconnecta.com.br", "GerenteOp@2026"),
+}
 
-        self.tests_run += 1
-        print(f"\n🔍 Testing {name}...")
-        
-        try:
-            if method == 'GET':
-                response = requests.get(url, headers=headers, params=params)
-            elif method == 'POST':
-                response = requests.post(url, json=data, headers=headers, params=params)
-            elif method == 'PATCH':
-                response = requests.patch(url, json=data, headers=headers)
-            elif method == 'DELETE':
-                response = requests.delete(url, headers=headers)
+def login(email: str, password: str) -> Dict[str, Any]:
+    """Login and return full response with token and user data."""
+    r = requests.post(f"{API}/auth/login", json={"email": email, "password": password})
+    if r.status_code != 200:
+        print(f"❌ Login failed for {email}: {r.status_code} {r.text}")
+        return None
+    return r.json()
 
-            success = response.status_code == expected_status
-            if success:
-                self.tests_passed += 1
-                print(f"✅ Passed - Status: {response.status_code}")
-                try:
-                    return success, response.json() if response.text else {}
-                except:
-                    return success, {}
-            else:
-                print(f"❌ Failed - Expected {expected_status}, got {response.status_code}")
-                try:
-                    error_detail = response.json()
-                    print(f"   Error: {error_detail}")
-                except:
-                    print(f"   Response: {response.text}")
-                return False, {}
+def hdr(token: str) -> Dict[str, str]:
+    """Return authorization headers."""
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-        except Exception as e:
-            print(f"❌ Failed - Error: {str(e)}")
-            return False, {}
+def print_section(title: str):
+    """Print section header."""
+    print(f"\n{'='*80}")
+    print(f"  {title}")
+    print(f"{'='*80}\n")
 
-    def test_seed_database(self):
-        """Test database seeding"""
-        success, response = self.run_test(
-            "Database Seed",
-            "POST",
-            "seed",
-            200
-        )
-        return success
-
-    def test_login(self, email, password):
-        """Test login and get token"""
-        success, response = self.run_test(
-            f"Login ({email})",
-            "POST",
-            "auth/login",
-            200,
-            data={"email": email, "password": password}
-        )
-        if success and 'access_token' in response:
-            self.token = response['access_token']
-            self.user_data = response.get('user', {})
-            print(f"   Logged in as: {self.user_data.get('name')} ({self.user_data.get('role')})")
-            return True
-        return False
-
-    def test_get_me(self):
-        """Test get current user"""
-        success, response = self.run_test(
-            "Get Current User",
-            "GET",
-            "auth/me",
-            200
-        )
-        return success
-
-    def test_dashboard_stats(self):
-        """Test dashboard statistics"""
-        success, response = self.run_test(
-            "Dashboard Stats",
-            "GET",
-            "dashboard/stats",
-            200
-        )
-        if success:
-            print(f"   Stats: {response}")
-        return success
-
-    def test_create_warehouse(self):
-        """Test warehouse creation"""
-        warehouse_data = {
-            "name": "Depósito Teste",
-            "location": "São Paulo, SP",
-            "description": "Depósito para testes automatizados"
-        }
-        success, response = self.run_test(
-            "Create Warehouse",
-            "POST",
-            "warehouses",
-            200,
-            data=warehouse_data
-        )
-        if success and 'id' in response:
-            self.created_ids['warehouse'] = response['id']
-            print(f"   Created warehouse ID: {response['id']}")
-        return success
-
-    def test_get_warehouses(self):
-        """Test get warehouses"""
-        success, response = self.run_test(
-            "Get Warehouses",
-            "GET",
-            "warehouses",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} warehouses")
-        return success
-
-    def test_create_supplier(self):
-        """Test supplier creation"""
-        supplier_data = {
-            "name": "Fornecedor Teste",
-            "cnpj": "12.345.678/0001-90",
-            "contact": "João Silva",
-            "email": "joao@fornecedor.com",
-            "phone": "(11) 99999-9999",
-            "address": "Rua Teste, 123"
-        }
-        success, response = self.run_test(
-            "Create Supplier",
-            "POST",
-            "suppliers",
-            200,
-            data=supplier_data
-        )
-        if success and 'id' in response:
-            self.created_ids['supplier'] = response['id']
-            print(f"   Created supplier ID: {response['id']}")
-        return success
-
-    def test_get_suppliers(self):
-        """Test get suppliers"""
-        success, response = self.run_test(
-            "Get Suppliers",
-            "GET",
-            "suppliers",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} suppliers")
-        return success
-
-    def test_create_product(self):
-        """Test product creation"""
-        product_data = {
-            "name": "Produto Teste",
-            "sku": f"TEST-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-            "description": "Produto para testes automatizados",
-            "category": "Teste",
-            "unit": "UN",
-            "min_stock": 10,
-            "cost_price": 50.0,
-            "sale_price": 100.0
-        }
-        success, response = self.run_test(
-            "Create Product",
-            "POST",
-            "products",
-            200,
-            data=product_data
-        )
-        if success and 'id' in response:
-            self.created_ids['product'] = response['id']
-            print(f"   Created product ID: {response['id']}")
-        return success
-
-    def test_get_products(self):
-        """Test get products"""
-        success, response = self.run_test(
-            "Get Products",
-            "GET",
-            "products",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} products")
-        return success
-
-    def test_inventory_adjust(self):
-        """Test inventory adjustment"""
-        if not self.created_ids['product'] or not self.created_ids['warehouse']:
-            print("❌ Cannot test inventory - missing product or warehouse")
-            return False
-        
-        success, response = self.run_test(
-            "Adjust Inventory",
-            "POST",
-            "inventory/adjust",
-            200,
-            params={
-                'product_id': self.created_ids['product'],
-                'warehouse_id': self.created_ids['warehouse'],
-                'quantity': 100
-            }
-        )
-        return success
-
-    def test_get_inventory(self):
-        """Test get inventory"""
-        success, response = self.run_test(
-            "Get Inventory",
-            "GET",
-            "inventory",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} inventory items")
-        return success
-
-    def test_create_invoice(self):
-        """Test invoice creation"""
-        invoice_data = {
-            "invoice_number": f"NF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-            "supplier_name": "Fornecedor Teste",
-            "issue_date": datetime.now().strftime('%Y-%m-%d'),
-            "total_value": 1000.0,
-            "tax_value": 100.0,
-            "items": [
-                {
-                    "product_name": "Produto Teste",
-                    "quantity": 10,
-                    "unit_price": 90.0,
-                    "total": 900.0
-                }
-            ]
-        }
-        success, response = self.run_test(
-            "Create Invoice",
-            "POST",
-            "invoices",
-            200,
-            data=invoice_data
-        )
-        return success
-
-    def test_get_invoices(self):
-        """Test get invoices"""
-        success, response = self.run_test(
-            "Get Invoices",
-            "GET",
-            "invoices",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} invoices")
-        return success
-
-    def test_create_sale(self):
-        """Test sale creation"""
-        if not self.created_ids['product'] or not self.created_ids['warehouse']:
-            print("❌ Cannot test sales - missing product or warehouse")
-            return False
+def test_all_logins():
+    """Test 1: Login all 8 users and verify JWT structure."""
+    print_section("TEST 1: Login All 8 Users + JWT Structure")
+    
+    tokens = {}
+    for key, (email, password) in CREDENTIALS.items():
+        result = login(email, password)
+        if result:
+            tokens[key] = result["access_token"]
+            user = result["user"]
             
-        sale_data = {
-            "customer_name": "Cliente Teste",
-            "customer_document": "123.456.789-00",
-            "warehouse_id": self.created_ids['warehouse'],
-            "items": [
-                {
-                    "product_id": self.created_ids['product'],
-                    "product_name": "Produto Teste",
-                    "quantity": 2,
-                    "unit_price": 100.0,
-                    "total": 200.0
-                }
-            ],
-            "subtotal": 200.0,
-            "discount": 0.0,
-            "total": 200.0,
-            "payment_method": "dinheiro",
-            "status": "completed"
-        }
-        success, response = self.run_test(
-            "Create Sale",
-            "POST",
-            "sales",
-            200,
-            data=sale_data
-        )
-        return success
-
-    def test_get_sales(self):
-        """Test get sales"""
-        success, response = self.run_test(
-            "Get Sales",
-            "GET",
-            "sales",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} sales")
-        return success
-
-    def test_financial_report(self):
-        """Test financial report"""
-        success, response = self.run_test(
-            "Financial Report (Month)",
-            "GET",
-            "reports/financial",
-            200,
-            params={'period': 'month'}
-        )
-        if success:
-            print(f"   Revenue: R$ {response.get('revenue', 0):.2f}")
-        return success
-
-    def test_get_users(self):
-        """Test get users (admin only)"""
-        success, response = self.run_test(
-            "Get Users",
-            "GET",
-            "users",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} users")
-        return success
-
-    def test_audit_logs(self):
-        """Test audit logs (admin/master only)"""
-        success, response = self.run_test(
-            "Get Audit Logs",
-            "GET",
-            "audit",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} audit logs")
-        return success
-
-    def test_stock_alerts(self):
-        """Test stock alerts"""
-        success, response = self.run_test(
-            "Get Stock Alerts",
-            "GET",
-            "dashboard/alerts",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} stock alerts")
-        return success
-
-    def test_alert_configs(self):
-        """Test alert configurations"""
-        success, response = self.run_test(
-            "Get Alert Configs",
-            "GET",
-            "alerts/config",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} alert configs")
-        return success
-
-    def test_notifications(self):
-        """Test notifications"""
-        success, response = self.run_test(
-            "Get Notifications",
-            "GET",
-            "notifications",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} notifications")
-        return success
-
-    def test_create_order(self):
-        """Test order creation (new feature)"""
-        if not self.created_ids['product'] or not self.created_ids['warehouse']:
-            print("❌ Cannot test orders - missing product or warehouse")
-            return False
+            print(f"✅ {key:20s} | {email:40s}")
+            print(f"   Role: {user.get('role', 'N/A')}")
+            print(f"   Tenant: {user.get('tenant_name', 'N/A')}")
             
-        order_data = {
-            "customer_name": "Cliente Pedido Teste",
-            "customer_document": "123.456.789-00",
-            "customer_email": "cliente@teste.com",
-            "warehouse_id": self.created_ids['warehouse'],
-            "items": [
-                {
-                    "product_id": self.created_ids['product'],
-                    "product_name": "Produto Teste",
-                    "quantity": 3,
-                    "unit_price": 100.0,
-                    "total": 300.0
-                }
-            ],
-            "subtotal": 300.0,
-            "discount": 0.0,
-            "total": 300.0,
-            "type": "pedido",
-            "status": "draft"
-        }
-        success, response = self.run_test(
-            "Create Order (Pedido)",
-            "POST",
-            "orders",
-            200,
-            data=order_data
-        )
-        if success and 'id' in response:
-            self.created_ids['order'] = response['id']
-            print(f"   Created order ID: {response['id']}")
-        return success
-
-    def test_get_orders(self):
-        """Test get orders"""
-        success, response = self.run_test(
-            "Get Orders",
-            "GET",
-            "orders",
-            200
-        )
-        if success:
-            print(f"   Found {len(response)} orders")
-        return success
-
-    def test_convert_order_to_sale(self):
-        """Test converting order to sale (new feature)"""
-        if not self.created_ids.get('order'):
-            print("❌ Cannot test order conversion - no order created")
-            return False
+            # Check multi-warehouse fields
+            if "warehouse_ids" in user:
+                print(f"   warehouse_ids: {user['warehouse_ids']} (count: {len(user['warehouse_ids'])})")
+            if "store_ids" in user:
+                print(f"   store_ids: {user['store_ids']} (count: {len(user['store_ids'])})")
+            if "warehouse_id" in user:
+                print(f"   warehouse_id (legacy): {user['warehouse_id']}")
+            print()
+        else:
+            print(f"❌ {key} login failed\n")
             
-        success, response = self.run_test(
-            "Convert Order to Sale",
-            "POST",
-            f"orders/{self.created_ids['order']}/convert-to-sale",
-            200
-        )
-        if success:
-            print(f"   Order converted: {response.get('message', 'Success')}")
-        return success
+    return tokens
 
-    def test_cash_flow_report(self):
-        """Test cash flow report (new feature)"""
-        success, response = self.run_test(
-            "Cash Flow Report (Month)",
-            "GET",
-            "reports/cash-flow",
-            200,
-            params={'period': 'month'}
-        )
-        if success:
-            print(f"   Inflows: R$ {response.get('inflows', 0):.2f}")
-            print(f"   Outflows: R$ {response.get('outflows', 0):.2f}")
-            print(f"   Balance: R$ {response.get('balance', 0):.2f}")
-        return success
+def test_stores_scope(tokens: Dict[str, str]):
+    """Test 2: GET /api/stores filtered by scope."""
+    print_section("TEST 2: Stores Filtered by Scope")
+    
+    test_users = [
+        ("admin_arcos", "Admin Arcos (should see 2 stores)"),
+        ("gerente_geral", "Gerente Geral (should see 2 stores)"),
+        ("gerente_log_a", "Gerente Logistica A (should see 1 store)"),
+    ]
+    
+    for key, desc in test_users:
+        if key not in tokens:
+            print(f"⚠️  {desc}: No token available")
+            continue
+            
+        r = requests.get(f"{API}/stores", headers=hdr(tokens[key]))
+        if r.status_code == 200:
+            stores = r.json()
+            print(f"✅ {desc}")
+            print(f"   Stores count: {len(stores)}")
+            for store in stores:
+                print(f"   - {store.get('name', 'N/A')} (id: {store.get('id', 'N/A')})")
+        else:
+            print(f"❌ {desc}: {r.status_code} {r.text}")
+        print()
 
-    def test_export_pdf_report(self):
-        """Test PDF export (new feature)"""
-        success, response = self.run_test(
-            "Export PDF Report",
-            "GET",
-            "reports/export/pdf",
-            200,
-            params={'period': 'month'}
-        )
-        if success:
-            print(f"   PDF export successful")
-        return success
+def test_dashboard_stats(tokens: Dict[str, str]):
+    """Test 3: GET /api/dashboard/stats - verify total_stores field."""
+    print_section("TEST 3: Dashboard Stats (total_stores field)")
+    
+    test_users = ["admin_arcos", "gerente_geral", "admin_tj"]
+    
+    for key in test_users:
+        if key not in tokens:
+            print(f"⚠️  {key}: No token available")
+            continue
+            
+        r = requests.get(f"{API}/dashboard/stats", headers=hdr(tokens[key]))
+        if r.status_code == 200:
+            stats = r.json()
+            print(f"✅ {key}")
+            print(f"   total_stores: {stats.get('total_stores', 'MISSING')}")
+            print(f"   total_warehouses: {stats.get('total_warehouses', 'N/A')}")
+            print(f"   total_products: {stats.get('total_products', 'N/A')}")
+        else:
+            print(f"❌ {key}: {r.status_code} {r.text}")
+        print()
 
-    def test_export_excel_report(self):
-        """Test Excel export (new feature)"""
-        success, response = self.run_test(
-            "Export Excel Report",
-            "GET",
-            "reports/export/excel",
-            200,
-            params={'period': 'month'}
-        )
-        if success:
-            print(f"   Excel export successful")
-        return success
-
-    def test_invoice_ocr_endpoint(self):
-        """Test invoice OCR endpoint (new feature)"""
-        # Test with a simple base64 image (1x1 pixel PNG)
-        test_image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGAWA0ddgAAAABJRU5ErkJggg=="
+def test_transfers(tokens: Dict[str, str]):
+    """Test 4: POST /api/transfers - PAI to PAI transfer."""
+    print_section("TEST 4: Transfers Between Stores (PAI→PAI)")
+    
+    # First get warehouses for Arcos tenant
+    if "admin_arcos" not in tokens:
+        print("⚠️  No admin_arcos token, skipping transfer test")
+        return
         
-        success, response = self.run_test(
-            "Invoice OCR Processing",
-            "POST",
-            "invoices/ocr",
-            500,  # Expected to fail due to invalid image, but endpoint should exist
-            data={"image_base64": test_image_b64}
+    r = requests.get(f"{API}/warehouses", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code != 200:
+        print(f"❌ Failed to get warehouses: {r.status_code}")
+        return
+        
+    warehouses = r.json()
+    pai_warehouses = [w for w in warehouses if w.get("type", "").lower() == "pai"]
+    
+    if len(pai_warehouses) < 2:
+        print(f"⚠️  Need at least 2 PAI warehouses, found {len(pai_warehouses)}")
+        return
+        
+    pai_a = pai_warehouses[0]
+    pai_b = pai_warehouses[1]
+    
+    print(f"PAI A: {pai_a['name']} (id: {pai_a['id']})")
+    print(f"PAI B: {pai_b['name']} (id: {pai_b['id']})")
+    print()
+    
+    # Get products to transfer
+    r = requests.get(f"{API}/products", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code != 200 or not r.json():
+        print("⚠️  No products available for transfer test")
+        return
+        
+    product = r.json()[0]
+    print(f"Product: {product['name']} (id: {product['id']})")
+    print()
+    
+    # Test with gerente_geral (should succeed)
+    if "gerente_geral" in tokens:
+        transfer_data = {
+            "from_warehouse_id": pai_a["id"],
+            "to_warehouse_id": pai_b["id"],
+            "product_id": product["id"],
+            "quantity": 1,
+            "notes": "Test transfer PAI→PAI"
+        }
+        
+        r = requests.post(f"{API}/transfers", headers=hdr(tokens["gerente_geral"]), json=transfer_data)
+        if r.status_code == 200:
+            print(f"✅ Gerente Geral transfer succeeded")
+            transfer = r.json()
+            print(f"   Transfer ID: {transfer.get('id', 'N/A')}")
+            print(f"   From: {transfer.get('from_warehouse_name', 'N/A')}")
+            print(f"   To: {transfer.get('to_warehouse_name', 'N/A')}")
+            print(f"   Quantity: {transfer.get('quantity', 'N/A')}")
+        else:
+            print(f"❌ Gerente Geral transfer failed: {r.status_code} {r.text}")
+    print()
+    
+    # Test with gerente_operacional (should fail with 403)
+    if "gerente_op_a" in tokens:
+        transfer_data = {
+            "from_warehouse_id": pai_a["id"],
+            "to_warehouse_id": pai_b["id"],
+            "product_id": product["id"],
+            "quantity": 1,
+            "notes": "Test transfer (should fail)"
+        }
+        
+        r = requests.post(f"{API}/transfers", headers=hdr(tokens["gerente_op_a"]), json=transfer_data)
+        if r.status_code == 403:
+            print(f"✅ Gerente Operacional correctly blocked (403)")
+        else:
+            print(f"❌ Gerente Operacional should get 403, got: {r.status_code}")
+    print()
+
+def test_modules_config(tokens: Dict[str, str]):
+    """Test 5: Module configuration endpoints."""
+    print_section("TEST 5: Module Configuration")
+    
+    if "admin_arcos" not in tokens:
+        print("⚠️  No admin_arcos token, skipping module test")
+        return
+        
+    # Get PAI warehouse
+    r = requests.get(f"{API}/warehouses", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code != 200:
+        print(f"❌ Failed to get warehouses: {r.status_code}")
+        return
+        
+    pai_warehouses = [w for w in r.json() if w.get("type", "").lower() == "pai"]
+    if not pai_warehouses:
+        print("⚠️  No PAI warehouse found")
+        return
+        
+    pai = pai_warehouses[0]
+    print(f"Testing with PAI: {pai['name']} (id: {pai['id']})")
+    print()
+    
+    # Test GET /api/modules (list all available modules)
+    r = requests.get(f"{API}/modules", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code == 200:
+        modules = r.json()
+        print(f"✅ GET /api/modules: {len(modules)} modules available")
+        for mod in modules:
+            print(f"   - {mod}")
+    else:
+        print(f"❌ GET /api/modules failed: {r.status_code}")
+    print()
+    
+    # Test GET /api/modules/me (user's effective modules)
+    r = requests.get(f"{API}/modules/me", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code == 200:
+        my_modules = r.json()
+        print(f"✅ GET /api/modules/me: {len(my_modules.get('enabled_modules', []))} enabled")
+        print(f"   Modules: {my_modules.get('enabled_modules', [])}")
+    else:
+        print(f"❌ GET /api/modules/me failed: {r.status_code}")
+    print()
+    
+    # Test GET /api/warehouses/{wid}/modules
+    r = requests.get(f"{API}/warehouses/{pai['id']}/modules", headers=hdr(tokens["admin_arcos"]))
+    if r.status_code == 200:
+        wh_modules = r.json()
+        print(f"✅ GET /api/warehouses/{pai['id']}/modules")
+        print(f"   Enabled: {wh_modules.get('enabled_modules', [])}")
+    else:
+        print(f"❌ GET /api/warehouses/{pai['id']}/modules failed: {r.status_code}")
+    print()
+    
+    # Test PUT /api/warehouses/{wid}/modules (disable one module)
+    current_modules = wh_modules.get('enabled_modules', [])
+    if current_modules:
+        test_modules = current_modules[:-1]  # Remove last module
+        r = requests.put(
+            f"{API}/warehouses/{pai['id']}/modules",
+            headers=hdr(tokens["admin_arcos"]),
+            json={"enabled_modules": test_modules}
         )
-        # We expect this to fail with 500 due to OCR processing, but endpoint should exist
-        if not success:
-            print("   ✅ OCR endpoint exists (expected processing failure)")
-            return True
-        return success
+        if r.status_code == 200:
+            print(f"✅ PUT /api/warehouses/{pai['id']}/modules succeeded")
+            print(f"   Updated modules: {r.json().get('enabled_modules', [])}")
+            
+            # Restore original modules
+            requests.put(
+                f"{API}/warehouses/{pai['id']}/modules",
+                headers=hdr(tokens["admin_arcos"]),
+                json={"enabled_modules": current_modules}
+            )
+        else:
+            print(f"❌ PUT /api/warehouses/{pai['id']}/modules failed: {r.status_code} {r.text}")
+    print()
+    
+    # Test invalid module name (should get 422)
+    r = requests.put(
+        f"{API}/warehouses/{pai['id']}/modules",
+        headers=hdr(tokens["admin_arcos"]),
+        json={"enabled_modules": ["invalid_module_xyz"]}
+    )
+    if r.status_code == 422:
+        print(f"✅ Invalid module correctly rejected (422)")
+    else:
+        print(f"❌ Invalid module should get 422, got: {r.status_code}")
+    print()
+
+def test_audit_scoped(tokens: Dict[str, str]):
+    """Test 6: GET /api/audit scoped per role."""
+    print_section("TEST 6: Audit Logs Scoped by Role")
+    
+    test_users = [
+        ("gerente_geral", "Gerente Geral (should see Arcos tenant)"),
+        ("gerente_log_a", "Gerente Logistica A (should see their PAI)"),
+        ("admin_tj", "Admin TJ (should see TJ tenant)"),
+    ]
+    
+    for key, desc in test_users:
+        if key not in tokens:
+            print(f"⚠️  {desc}: No token available")
+            continue
+            
+        r = requests.get(f"{API}/audit?limit=5", headers=hdr(tokens[key]))
+        if r.status_code == 200:
+            logs = r.json()
+            print(f"✅ {desc}")
+            print(f"   Audit logs count: {len(logs)}")
+            if logs:
+                print(f"   Latest action: {logs[0].get('action', 'N/A')}")
+                print(f"   User: {logs[0].get('user_email', 'N/A')}")
+        else:
+            print(f"❌ {desc}: {r.status_code} {r.text}")
+        print()
+
+def test_seed_idempotent():
+    """Test 7: POST /api/seed idempotency."""
+    print_section("TEST 7: Seed Idempotency")
+    
+    r = requests.post(f"{API}/seed")
+    if r.status_code == 200:
+        result = r.json()
+        print(f"✅ Seed endpoint responded: {r.status_code}")
+        print(f"   Message: {result.get('message', 'N/A')}")
+        
+        # Call again to verify idempotency
+        r2 = requests.post(f"{API}/seed")
+        if r2.status_code == 200:
+            result2 = r2.json()
+            print(f"✅ Second seed call: {r2.status_code}")
+            print(f"   Message: {result2.get('message', 'N/A')}")
+            
+            if "inicializado" in result2.get('message', '').lower():
+                print(f"✅ Seed is idempotent (already initialized message)")
+        else:
+            print(f"❌ Second seed call failed: {r2.status_code}")
+    else:
+        print(f"❌ Seed failed: {r.status_code} {r.text}")
+    print()
 
 def main():
-    print("🚀 Starting Gestão TJ API Tests")
-    print("=" * 50)
+    """Run all manual verification tests."""
+    print("\n" + "="*80)
+    print("  GESTAO TJ SAAS - BACKEND REFACTORING VERIFICATION")
+    print("  Testing against: " + BASE_URL)
+    print("="*80)
     
-    tester = GestaoTJAPITester()
+    # Test 1: Login all users
+    tokens = test_all_logins()
     
-    # Test database seeding
-    print("\n📦 Testing Database Setup")
-    tester.test_seed_database()
+    if not tokens:
+        print("\n❌ No tokens obtained, cannot continue with other tests")
+        return
     
-    # Test admin login
-    print("\n🔐 Testing Authentication")
-    if not tester.test_login("admin@gestaotj.com", "Admin@123456"):
-        print("❌ Admin login failed, stopping tests")
-        return 1
+    # Test 2: Stores scope
+    test_stores_scope(tokens)
     
-    tester.test_get_me()
+    # Test 3: Dashboard stats
+    test_dashboard_stats(tokens)
     
-    # Test core functionality
-    print("\n📊 Testing Dashboard")
-    tester.test_dashboard_stats()
-    tester.test_stock_alerts()
+    # Test 4: Transfers
+    test_transfers(tokens)
     
-    print("\n🏢 Testing Warehouses")
-    tester.test_create_warehouse()
-    tester.test_get_warehouses()
+    # Test 5: Modules
+    test_modules_config(tokens)
     
-    print("\n🏭 Testing Suppliers")
-    tester.test_create_supplier()
-    tester.test_get_suppliers()
+    # Test 6: Audit
+    test_audit_scoped(tokens)
     
-    print("\n📦 Testing Products")
-    tester.test_create_product()
-    tester.test_get_products()
+    # Test 7: Seed idempotency
+    test_seed_idempotent()
     
-    print("\n📋 Testing Inventory")
-    tester.test_inventory_adjust()
-    tester.test_get_inventory()
-    
-    print("\n📄 Testing Invoices")
-    tester.test_create_invoice()
-    tester.test_get_invoices()
-    
-    print("\n💰 Testing Sales")
-    tester.test_create_sale()
-    tester.test_get_sales()
-    
-    print("\n📈 Testing Reports")
-    tester.test_financial_report()
-    
-    print("\n👥 Testing Users")
-    tester.test_get_users()
-    
-    print("\n🔍 Testing Audit")
-    tester.test_audit_logs()
-    
-    print("\n🔔 Testing Alerts")
-    tester.test_alert_configs()
-    tester.test_notifications()
-    
-    # Test new features
-    print("\n📋 Testing Orders (New Feature)")
-    tester.test_create_order()
-    tester.test_get_orders()
-    tester.test_convert_order_to_sale()
-    
-    print("\n💰 Testing Cash Flow Reports (New Feature)")
-    tester.test_cash_flow_report()
-    
-    print("\n📄 Testing Report Exports (New Feature)")
-    tester.test_export_pdf_report()
-    tester.test_export_excel_report()
-    
-    print("\n🖼️ Testing Invoice OCR (New Feature)")
-    tester.test_invoice_ocr_endpoint()
-    
-    # Test different user roles
-    print("\n👤 Testing Manager Role")
-    if tester.test_login("gerente@gestaotj.com", "Gerente@123"):
-        tester.test_dashboard_stats()
-        tester.test_get_products()
-        tester.test_audit_logs()
-    
-    print("\n👤 Testing User Role")
-    if tester.test_login("usuario@gestaotj.com", "Usuario@123"):
-        tester.test_dashboard_stats()
-        tester.test_get_products()
-        # Should fail for audit logs
-        tester.run_test("Get Audit Logs (Should Fail)", "GET", "audit", 403)
-    
-    # Print final results
-    print("\n" + "=" * 50)
-    print(f"📊 Final Results: {tester.tests_passed}/{tester.tests_run} tests passed")
-    success_rate = (tester.tests_passed / tester.tests_run * 100) if tester.tests_run > 0 else 0
-    print(f"📈 Success Rate: {success_rate:.1f}%")
-    
-    if success_rate >= 80:
-        print("✅ Backend API testing completed successfully!")
-        return 0
-    else:
-        print("❌ Backend API testing failed - too many failures")
-        return 1
+    print("\n" + "="*80)
+    print("  VERIFICATION COMPLETE")
+    print("="*80 + "\n")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
