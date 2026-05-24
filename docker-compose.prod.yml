@@ -1,34 +1,152 @@
-# Producao: nginx reverse-proxy na frente + SSL.
-# Use junto com /app/docker-compose.yml: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Docker Compose para PRODUÇÃO
+# Inclui configurações otimizadas, healthchecks e logging
+
 version: "3.9"
 
 services:
-  backend:
-    expose:
-      - "8001"
-    ports: []  # nao expor diretamente
+  # MongoDB com autenticação e volumes persistentes
+  mongo:
+    image: mongo:7
+    container_name: gestao-tj-mongo-prod
+    restart: always
     environment:
-      JWT_SECRET: ${JWT_SECRET}
-      CORS_ORIGINS: ${CORS_ORIGINS}
-      SEED_SECRET: ${SEED_SECRET}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
+      MONGO_INITDB_DATABASE: ${DB_NAME:-gestaotj}
+    volumes:
+      - mongo-data-prod:/data/db
+      - mongo-config:/data/configdb
+    ports:
+      - "127.0.0.1:27017:27017"  # Apenas localhost
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - gestao-tj-network-prod
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # Backend FastAPI com workers
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: gestao-tj-backend:latest
+    container_name: gestao-tj-backend-prod
+    restart: always
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      # Database
+      MONGO_URL: mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${DB_NAME:-gestaotj}?authSource=admin
+      DB_NAME: ${DB_NAME:-gestaotj}
+      
+      # Security
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      SEED_SECRET: ${SEED_SECRET:-}
+      
+      # Email
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD is required}
+      
+      # App
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      
+      # Optional
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      
+      # Production settings
+      ENVIRONMENT: production
+    ports:
+      - "127.0.0.1:8001:8001"  # Apenas localhost (use nginx como proxy)
+    volumes:
+      - backend-uploads:/app/uploads
+      - backend-logs:/app/logs
+    networks:
+      - gestao-tj-network-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # React Frontend servido via Nginx
   frontend:
-    expose:
-      - "80"
-    ports: []
-
-  proxy:
-    image: nginx:1.27-alpine
-    container_name: gestao-tj-proxy
-    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:?REACT_APP_BACKEND_URL is required}
+    image: gestao-tj-frontend:latest
+    container_name: gestao-tj-frontend-prod
+    restart: always
     depends_on:
       - backend
-      - frontend
-    volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-      - ./nginx/logs:/var/log/nginx
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - nginx-cache:/var/cache/nginx
+      - nginx-logs:/var/log/nginx
+    networks:
+      - gestao-tj-network-prod
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+volumes:
+  mongo-data-prod:
+    driver: local
+  mongo-config:
+    driver: local
+  backend-uploads:
+    driver: local
+  backend-logs:
+    driver: local
+  nginx-cache:
+    driver: local
+  nginx-logs:
+    driver: local
+
+networks:
+  gestao-tj-network-prod:
+    driver: bridge
