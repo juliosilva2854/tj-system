@@ -131,13 +131,13 @@ export const DashboardLayout = () => {
         </nav>
 
         <div className="border-t border-zinc-200 p-3">
-          <div className="flex items-center gap-2 mb-2">
+          <Link to="/dashboard/profile" className="flex items-center gap-2 mb-2 hover:bg-zinc-50 rounded-lg p-2 -m-2 transition-colors">
             <div className={`h-8 w-8 rounded-full ${accentBgSoft} flex items-center justify-center flex-shrink-0`}><UserCircle className={`h-4 w-4 ${accentText}`} /></div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-zinc-900 truncate" data-testid="user-name">{user.name}</p>
               <p className="text-[10px] text-zinc-500 truncate" data-testid="user-role">{ROLE_LABEL[user.role] || user.role}</p>
             </div>
-          </div>
+          </Link>
           <button onClick={handleLogout} data-testid="logout-button" className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors"><LogOut className="h-4 w-4" /><span>Sair</span></button>
         </div>
       </div>

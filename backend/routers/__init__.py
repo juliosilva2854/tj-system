@@ -16,6 +16,7 @@ from . import (
     reports as reports_router,
     audit as audit_router,
     notifications as notifications_router,
+    uploads as uploads_router,
     seed as seed_router,
 )
 
@@ -37,5 +38,6 @@ ALL_ROUTERS = [
     reports_router.router,
     audit_router.router,
     notifications_router.router,
+    uploads_router.router,
     seed_router.router,
 ]

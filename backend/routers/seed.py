@@ -30,6 +30,19 @@ async def seed(_: bool = Depends(require_seed_secret)):
         # Backfill warehouse_ids/store_ids para usuarios antigos que nao tem
         await db.users.update_many({"warehouse_ids": {"$exists": False}}, {"$set": {"warehouse_ids": []}})
         await db.users.update_many({"store_ids": {"$exists": False}}, {"$set": {"store_ids": []}})
+        
+        # Backfill novos campos de autenticação
+        await db.users.update_many({"username": {"$exists": False}}, {"$set": {"username": None}})
+        await db.users.update_many({"cpf": {"$exists": False}}, {"$set": {"cpf": None}})
+        await db.users.update_many({"phone": {"$exists": False}}, {"$set": {"phone": None}})
+        await db.users.update_many({"is_master_access": {"$exists": False}}, {"$set": {"is_master_access": False}})
+        await db.users.update_many({"permissions": {"$exists": False}}, {"$set": {"permissions": {}}})
+        await db.users.update_many({"managed_by": {"$exists": False}}, {"$set": {"managed_by": None}})
+        await db.users.update_many({"profile_picture": {"$exists": False}}, {"$set": {"profile_picture": None}})
+        
+        # Atualizar master para ter is_master_access=True
+        await db.users.update_one({"role": "master"}, {"$set": {"is_master_access": True}})
+        
         return {"message": "Ja inicializado"}
 
     now = datetime.now(timezone.utc).isoformat()
@@ -109,45 +122,86 @@ async def seed(_: bool = Depends(require_seed_secret)):
     ])
 
     users = [
-        # Globais
-        {"id": gen_id(), "email": "master@sconnecta.com.br", "name": "Master Global", "role": "master",
-         "tenant_id": "", "warehouse_id": "", "warehouse_ids": [], "store_ids": [],
+        # MASTER GLOBAL (acesso via email em administrator.sconnecta.com.br)
+        {"id": gen_id(), "email": "master@sconnecta.com.br", "name": "Master Global",
+         "username": None, "cpf": None, "phone": None,
+         "role": "master", "tenant_id": "", "warehouse_id": "",
+         "warehouse_ids": [], "store_ids": [],
+         "is_master_access": True, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("Master@2026"), "active": True, "created_at": now},
+        
         # Tenant LEGADO TJ
-        {"id": gen_id(), "email": "admin@tj.sconnecta.com.br", "name": "Admin TJ", "role": "admin",
-         "tenant_id": legacy_tid, "warehouse_id": "", "warehouse_ids": [], "store_ids": [],
+        {"id": gen_id(), "email": "admin@tj.sconnecta.com.br", "name": "Admin TJ",
+         "username": "admin.tj", "cpf": "12345678901", "phone": "(11) 98888-1111",
+         "role": "admin", "tenant_id": legacy_tid, "warehouse_id": "",
+         "warehouse_ids": [], "store_ids": [],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("Admin@2026"), "active": True, "created_at": now},
-        {"id": gen_id(), "email": "logistica@tj.sconnecta.com.br", "name": "Logistica PAI", "role": "logistica",
-         "tenant_id": legacy_tid, "warehouse_id": legacy_pai_id,
+        
+        {"id": gen_id(), "email": "logistica@tj.sconnecta.com.br", "name": "Logistica PAI",
+         "username": "logistica.tj", "cpf": "98765432109", "phone": "(11) 98888-2222",
+         "role": "logistica", "tenant_id": legacy_tid, "warehouse_id": legacy_pai_id,
          "warehouse_ids": [legacy_pai_id], "store_ids": [legacy_store_id],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("Logistica@2026"), "active": True, "created_at": now},
-        {"id": gen_id(), "email": "operacional@tj.sconnecta.com.br", "name": "Operacional FILHO", "role": "operacional",
-         "tenant_id": legacy_tid, "warehouse_id": legacy_filho_id,
+        
+        {"id": gen_id(), "email": "operacional@tj.sconnecta.com.br", "name": "Operacional FILHO",
+         "username": "operacional.tj", "cpf": "11122233344", "phone": "(11) 98888-3333",
+         "role": "operacional", "tenant_id": legacy_tid, "warehouse_id": legacy_filho_id,
          "warehouse_ids": [legacy_filho_id], "store_ids": [],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("Operacional@2026"), "active": True, "created_at": now},
+        
         # Tenant ARCOS DOURADOS
-        {"id": gen_id(), "email": "admin@arcos.sconnecta.com.br", "name": "Admin Arcos", "role": "admin",
-         "tenant_id": arcos_tid, "warehouse_id": "", "warehouse_ids": [], "store_ids": [],
+        {"id": gen_id(), "email": "admin@arcos.sconnecta.com.br", "name": "Admin Arcos",
+         "username": "admin.arcos", "cpf": "55566677788", "phone": "(11) 98888-4444",
+         "role": "admin", "tenant_id": arcos_tid, "warehouse_id": "",
+         "warehouse_ids": [], "store_ids": [],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("Admin@2026"), "active": True, "created_at": now},
+        
         {"id": gen_id(), "email": "gerentegeral@arcos.sconnecta.com.br", "name": "Gerente Geral Arcos",
-         "role": "gerente_geral",
-         "tenant_id": arcos_tid, "warehouse_id": "",
+         "username": "geral.arcos", "cpf": "99988877766", "phone": "(11) 98888-5555",
+         "role": "gerente_geral", "tenant_id": arcos_tid, "warehouse_id": "",
          "warehouse_ids": [], "store_ids": [rest_a_id, rest_b_id],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("GerenteGeral@2026"), "active": True, "created_at": now},
+        
         {"id": gen_id(), "email": "gerentelogA@arcos.sconnecta.com.br", "name": "Gerente Logistica Rest. A",
-         "role": "gerente_logistica",
-         "tenant_id": arcos_tid, "warehouse_id": pai_a,
+         "username": "logistica.restA", "cpf": "22233344455", "phone": "(11) 98888-6666",
+         "role": "gerente_logistica", "tenant_id": arcos_tid, "warehouse_id": pai_a,
          "warehouse_ids": [pai_a], "store_ids": [rest_a_id],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("GerenteLog@2026"), "active": True, "created_at": now},
+        
         {"id": gen_id(), "email": "gerenteopA@arcos.sconnecta.com.br", "name": "Gerente Operacional Rest. A",
-         "role": "gerente_operacional",
-         "tenant_id": arcos_tid, "warehouse_id": filho_a1,
+         "username": "operacional.restA", "cpf": "66677788899", "phone": "(11) 98888-7777",
+         "role": "gerente_operacional", "tenant_id": arcos_tid, "warehouse_id": filho_a1,
          "warehouse_ids": [filho_a1, filho_a2], "store_ids": [],
+         "is_master_access": False, "permissions": {}, "managed_by": None,
+         "profile_picture": None,
          "password_hash": hash_password("GerenteOp@2026"), "active": True, "created_at": now},
     ]
     await db.users.insert_many(users)
+    
+    # Criar índices únicos
     try:
         await db.users.create_index("email", unique=True)
+    except Exception:
+        pass
+    try:
+        await db.users.create_index("username", unique=True, sparse=True)
+    except Exception:
+        pass
+    try:
+        await db.users.create_index("cpf", unique=True, sparse=True)
     except Exception:
         pass
     try:

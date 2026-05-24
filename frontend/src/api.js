@@ -20,6 +20,19 @@ export const authAPI = {
   register: (d) => api.post('/auth/register', d),
   me: () => api.get('/auth/me'),
   seed: () => api.post('/seed'),
+  forgotPassword: (identifier) => api.post('/auth/forgot-password', { identifier }),
+  resetPassword: (token, new_password) => api.post('/auth/reset-password', { token, new_password }),
+  getProfile: () => api.get('/auth/profile'),
+  updateProfile: (data) => api.put('/auth/profile', data),
+  changePassword: (current_password, new_password) => api.put('/auth/change-password', { current_password, new_password }),
+  uploadProfilePicture: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/auth/profile/picture', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+  deleteProfilePicture: () => api.delete('/auth/profile/picture'),
 };
 export const tenantsAPI = {
   getAll: () => api.get('/tenants'),
@@ -116,8 +129,9 @@ export const getSubdomain = () => {
 };
 
 export const isMasterSubdomain = () => {
-  const sub = getSubdomain();
-  return sub === 'master';
+  const hostname = window.location.hostname;
+  // administrator.* ou master.* = master access
+  return hostname.startsWith('administrator.') || hostname.startsWith('master.');
 };
 
 export default api;
