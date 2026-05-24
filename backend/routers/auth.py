@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from datetime import datetime, timezone, timedelta
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -13,8 +13,11 @@ limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/auth/login")
 @limiter.limit("10/minute")
-async def login(request: Request, creds: UserLogin):
-    """Login dual: username (usuários normais) ou email (master/admin-sistema)"""
+async def login(request: Request, response: Response, creds: UserLogin):
+    """Login dual: username (usuários normais) ou email (master/admin-sistema)
+    
+    Security: Tokens são armazenados em httpOnly cookies para proteção contra XSS
+    """
     identifier = creds.identifier.lower().strip()
     
     # Se is_master=True, busca por email; senão, tenta username primeiro
@@ -33,11 +36,32 @@ async def login(request: Request, creds: UserLogin):
     
     access = token_from_user_doc(doc)
     refresh = create_refresh_token(doc['id'])
+    
+    # Set httpOnly cookies para segurança contra XSS
+    response.set_cookie(
+        key="access_token",
+        value=access,
+        httponly=True,
+        secure=True,  # HTTPS only em produção
+        samesite="lax",
+        max_age=3600  # 1 hora
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=604800  # 7 dias
+    )
+    
     user_out = {k: doc.get(k) for k in [
         'id', 'email', 'name', 'username', 'cpf', 'phone', 'role', 'tenant_id', 
         'warehouse_id', 'warehouse_ids', 'store_ids', 'is_master_access',
         'profile_picture', 'permissions', 'managed_by', 'active', 'created_at'
     ] if k in doc}
+    
+    # Retorna tokens também no body para compatibilidade (pode ser removido depois)
     return {"access_token": access, "refresh_token": refresh, "user": user_out}
 
 @router.post("/auth/refresh")
@@ -303,6 +327,15 @@ async def update_profile(data: dict, user: dict = Depends(get_current_user)):
     await db.users.update_one({"id": user['sub']}, {"$set": updates})
     
     return {"message": "Perfil atualizado com sucesso"}
+
+
+
+@router.post("/auth/logout")
+async def logout(response: Response):
+    """Logout: limpa cookies httpOnly"""
+    response.delete_cookie(key="access_token")
+    response.delete_cookie(key="refresh_token")
+    return {"message": "Logout realizado com sucesso"}
 
 @router.put("/auth/change-password")
 async def change_password(data: dict, user: dict = Depends(get_current_user)):

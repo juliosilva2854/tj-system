@@ -28,7 +28,13 @@ export const DashboardLayout = () => {
   const location = useLocation();
 
   const fetchUnread = useCallback(async () => {
-    try { const r = await notificationsAPI.getUnreadCount(); setUnreadCount(r.data.count); } catch {}
+    try { 
+      const r = await notificationsAPI.getUnreadCount(); 
+      setUnreadCount(r.data.count); 
+    } catch (error) {
+      console.error('Failed to fetch unread notifications count:', error);
+      // Não é crítico, apenas log do erro
+    }
   }, []);
 
   useEffect(() => {
