@@ -1,9 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { authAPI, notificationsAPI } from '../api';
-import { Home, Package, Warehouse, Users, FileText, TrendingUp, LogOut, ClipboardList, UserCircle, BarChart3, Bell, Menu, X, HelpCircle, Building2, ArrowLeftRight, ShieldCheck } from 'lucide-react';
+import { Home, Package, Warehouse, Users, FileText, TrendingUp, LogOut, ClipboardList, UserCircle, BarChart3, Bell, Menu, X, HelpCircle, Building2, ArrowLeftRight, ShieldCheck, Store, Settings, Boxes } from 'lucide-react';
 
-const ROLE_LABEL = { master: 'Master Global', admin: 'Administrador', logistica: 'Logistica (PAI)', operacional: 'Operacional (FILHO)' };
+const ROLE_LABEL = {
+  master: 'Master Global',
+  admin: 'Administrador',
+  gerente_geral: 'Gerente Geral',
+  gerente_logistica: 'Gerente Logistica',
+  gerente_operacional: 'Gerente Operacional',
+  logistica: 'Logistica (PAI)',
+  operacional: 'Operacional (FILHO)',
+};
+
+// Grupos de role para uso nos menus
+const ALL_NON_MASTER = ['admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional', 'logistica', 'operacional'];
+const ADMIN_LIKE = ['master', 'admin', 'gerente_geral'];
+const ADMIN_LOG_LIKE = ['master', 'admin', 'gerente_geral', 'gerente_logistica', 'logistica'];
+const OPS_LIKE = ['master', 'admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional', 'logistica', 'operacional'];
+const APPROVERS = ['master', 'admin', 'gerente_geral', 'gerente_logistica', 'logistica'];
 
 export const DashboardLayout = () => {
   const [user, setUser] = useState(null);
@@ -41,28 +56,46 @@ export const DashboardLayout = () => {
     navigate('/login');
   };
 
+  // Cada item tem (1) roles permitidos e (2) module key (opcional) — se houver, item so aparece se modulo estiver habilitado
   const menuItems = [
-    { icon: Home, label: 'Dashboard', path: '/dashboard', roles: ['master', 'admin', 'logistica', 'operacional'] },
+    { icon: Home, label: 'Dashboard', path: '/dashboard', roles: ['master', ...ALL_NON_MASTER], module: 'dashboard' },
     { icon: Building2, label: 'Estabelecimentos', path: '/dashboard/tenants', roles: ['master'] },
-    { icon: Warehouse, label: 'Depositos', path: '/dashboard/warehouses', roles: ['admin', 'logistica'] },
-    { icon: Package, label: 'Produtos', path: '/dashboard/products', roles: ['admin', 'logistica'] },
-    { icon: ClipboardList, label: 'Estoque', path: '/dashboard/inventory', roles: ['admin', 'logistica', 'operacional'] },
-    { icon: ArrowLeftRight, label: 'Requisicoes', path: '/dashboard/requisitions', roles: ['admin', 'logistica', 'operacional'] },
-    { icon: UserCircle, label: 'Fornecedores', path: '/dashboard/suppliers', roles: ['admin', 'logistica'] },
-    { icon: FileText, label: 'Notas Fiscais', path: '/dashboard/invoices', roles: ['admin', 'logistica'] },
-    { icon: BarChart3, label: 'Relatorios', path: '/dashboard/reports', roles: ['admin'] },
-    { icon: Bell, label: 'Alertas', path: '/dashboard/alerts', roles: ['admin', 'logistica', 'operacional'] },
-    { icon: TrendingUp, label: 'Auditoria', path: '/dashboard/audit', roles: ['master', 'admin'] },
-    { icon: Users, label: 'Usuarios', path: '/dashboard/users', roles: ['master', 'admin'] },
-    { icon: HelpCircle, label: 'Guia', path: '/dashboard/guide', roles: ['master', 'admin', 'logistica', 'operacional'] },
+    { icon: Settings, label: 'Modulos', path: '/dashboard/modules', roles: ['master', 'admin'], module: 'modules' },
+    { icon: Store, label: 'Lojas', path: '/dashboard/stores', roles: ['master', 'admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional'], module: 'stores' },
+    { icon: Warehouse, label: 'Depositos', path: '/dashboard/warehouses', roles: ADMIN_LOG_LIKE, module: 'warehouses' },
+    { icon: Package, label: 'Produtos', path: '/dashboard/products', roles: ADMIN_LOG_LIKE, module: 'products' },
+    { icon: ClipboardList, label: 'Estoque', path: '/dashboard/inventory', roles: OPS_LIKE, module: 'inventory' },
+    { icon: ArrowLeftRight, label: 'Requisicoes', path: '/dashboard/requisitions', roles: OPS_LIKE, module: 'requisitions' },
+    { icon: Boxes, label: 'Transferencias', path: '/dashboard/transfers', roles: ADMIN_LIKE, module: 'transfers' },
+    { icon: UserCircle, label: 'Fornecedores', path: '/dashboard/suppliers', roles: ADMIN_LOG_LIKE, module: 'suppliers' },
+    { icon: FileText, label: 'Notas Fiscais', path: '/dashboard/invoices', roles: ADMIN_LOG_LIKE, module: 'invoices' },
+    { icon: BarChart3, label: 'Relatorios', path: '/dashboard/reports', roles: ADMIN_LIKE, module: 'reports' },
+    { icon: Bell, label: 'Alertas', path: '/dashboard/alerts', roles: OPS_LIKE, module: 'alerts' },
+    { icon: TrendingUp, label: 'Auditoria', path: '/dashboard/audit', roles: ['master', 'admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional', 'logistica', 'operacional'], module: 'audit' },
+    { icon: Users, label: 'Usuarios', path: '/dashboard/users', roles: ['master', 'admin'], module: 'users' },
+    { icon: HelpCircle, label: 'Guia', path: '/dashboard/guide', roles: ['master', ...ALL_NON_MASTER], module: 'guide' },
   ];
 
   if (!user) return null;
-  const filteredMenu = menuItems.filter(i => i.roles.includes(user.role));
+  const enabled = user.enabled_modules || [];
+  const isMasterOrAdmin = ['master', 'admin'].includes(user.role);
+  const filteredMenu = menuItems.filter(i =>
+    i.roles.includes(user.role) &&
+    (isMasterOrAdmin || !i.module || enabled.includes(i.module))
+  );
   const isActive = (p) => location.pathname === p || (p !== '/dashboard' && location.pathname.startsWith(p));
   const accentBg = user.role === 'master' ? 'bg-indigo-600' : 'bg-blue-600';
   const accentText = user.role === 'master' ? 'text-indigo-600' : 'text-blue-600';
   const accentBgSoft = user.role === 'master' ? 'bg-indigo-50' : 'bg-blue-50';
+
+  const scopeLabel = () => {
+    if (user.role === 'master') return null;
+    if (user.warehouse_name) return user.warehouse_name;
+    const stores = user.store_names || [];
+    if (stores.length > 0) return stores.join(' + ');
+    return null;
+  };
+  const scope = scopeLabel();
 
   return (
     <div className="flex h-screen bg-zinc-50" data-testid="dashboard-layout">
@@ -81,9 +114,9 @@ export const DashboardLayout = () => {
           <p className="text-sm font-medium text-zinc-900 truncate flex items-center gap-1.5" data-testid="dashboard-tenant-name">
             {user.role === 'master' ? <><ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />Global (Master)</> : <><Building2 className="h-3.5 w-3.5 text-blue-600" />{user.tenant_name || '—'}</>}
           </p>
-          {user.warehouse_name && (
+          {scope && (
             <p className="text-[11px] text-zinc-500 mt-0.5 truncate flex items-center gap-1" data-testid="dashboard-warehouse-name">
-              <Warehouse className="h-3 w-3" />{user.warehouse_name}
+              <Warehouse className="h-3 w-3" />{scope}
             </p>
           )}
         </div>

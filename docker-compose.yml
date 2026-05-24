@@ -1,0 +1,49 @@
+# docker-compose para dev local - mongo + backend + frontend
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: gestao-tj-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: gestao-tj-backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: gestao_tj_db
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SEED_SECRET: ${SEED_SECRET:-}
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:8001}
+    container_name: gestao-tj-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  mongo-data:

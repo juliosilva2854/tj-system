@@ -24,6 +24,26 @@ export const authAPI = {
 export const tenantsAPI = {
   getAll: () => api.get('/tenants'),
   create: (d) => api.post('/tenants', d),
+  update: (id, d) => api.patch(`/tenants/${id}`, d),
+  delete: (id) => api.delete(`/tenants/${id}`),
+  createStore: (id, d) => api.post(`/tenants/${id}/stores`, d),
+};
+export const storesAPI = {
+  getAll: () => api.get('/stores'),
+  create: (d) => api.post('/stores', d),
+  update: (id, d) => api.patch(`/stores/${id}`, d),
+  delete: (id) => api.delete(`/stores/${id}`),
+};
+export const transfersAPI = {
+  getAll: () => api.get('/transfers'),
+  get: (id) => api.get(`/transfers/${id}`),
+  create: (d) => api.post('/transfers', d),
+};
+export const modulesAPI = {
+  list: () => api.get('/modules'),
+  me: () => api.get('/modules/me'),
+  getWarehouse: (wid) => api.get(`/warehouses/${wid}/modules`),
+  updateWarehouse: (wid, modules) => api.put(`/warehouses/${wid}/modules`, { enabled_modules: modules }),
 };
 export const usersAPI = {
   getAll: () => api.get('/users'),

@@ -8,8 +8,8 @@ import { Switch } from './ui/switch';
 import { Plus, Pencil, Trash2, UserCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
-const ROLE_LABEL = { master: 'Master Global', admin: 'Administrador', logistica: 'Logistica (PAI)', operacional: 'Operacional (FILHO)' };
-const ROLE_COLOR = { master: 'bg-indigo-100 text-indigo-700', admin: 'bg-blue-100 text-blue-700', logistica: 'bg-purple-100 text-purple-700', operacional: 'bg-zinc-100 text-zinc-700' };
+const ROLE_LABEL = { master: 'Master Global', admin: 'Administrador', gerente_geral: 'Gerente Geral', gerente_logistica: 'Gerente Logistica', gerente_operacional: 'Gerente Operacional', logistica: 'Logistica (PAI)', operacional: 'Operacional (FILHO)' };
+const ROLE_COLOR = { master: 'bg-indigo-100 text-indigo-700', admin: 'bg-blue-100 text-blue-700', gerente_geral: 'bg-amber-100 text-amber-800', gerente_logistica: 'bg-emerald-100 text-emerald-700', gerente_operacional: 'bg-sky-100 text-sky-700', logistica: 'bg-purple-100 text-purple-700', operacional: 'bg-zinc-100 text-zinc-700' };
 
 const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
 const initial = { email: '', name: '', password: '', role: 'operacional', tenant_id: '', warehouse_id: '' };
@@ -55,7 +55,9 @@ export const UsersPage = () => {
   }, [formData.tenant_id, isMaster]);
 
   const warehouseOptions = isMaster ? tenantWarehouses : warehouses;
-  const availableRoles = isMaster ? ['admin', 'logistica', 'operacional', 'master'] : ['admin', 'logistica', 'operacional'];
+  const availableRoles = isMaster
+    ? ['admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional', 'logistica', 'operacional', 'master']
+    : ['admin', 'gerente_geral', 'gerente_logistica', 'gerente_operacional', 'logistica', 'operacional'];
 
   const handleSubmit = async (e) => {
     e.preventDefault();

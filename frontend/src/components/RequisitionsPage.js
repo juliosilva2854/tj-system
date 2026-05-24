@@ -22,8 +22,8 @@ export const RequisitionsPage = () => {
   const [items, setItems] = useState([{ product_id: '', product_name: '', quantity: 1 }]);
   const [notes, setNotes] = useState('');
   const me = getCurrentUser();
-  const canCreate = ['operacional', 'admin'].includes(me.role);
-  const canApprove = ['master', 'admin', 'logistica'].includes(me.role);
+  const canCreate = ['operacional', 'gerente_operacional', 'admin'].includes(me.role);
+  const canApprove = ['master', 'admin', 'logistica', 'gerente_logistica', 'gerente_geral'].includes(me.role);
 
   useEffect(() => { load(); }, []);
 
