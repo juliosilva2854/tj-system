@@ -38,12 +38,25 @@ export const DashboardLayout = () => {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) { navigate('/login'); return; }
+    // Verifica se há sessão ativa (user em sessionStorage significa que fez login)
+    const userSession = sessionStorage.getItem('user');
+    if (!userSession) { 
+      navigate('/login'); 
+      return; 
+    }
+    
     authAPI.me().then(r => {
       setUser(r.data);
-      localStorage.setItem('user', JSON.stringify(r.data));
-    }).catch(() => {
+      // Atualiza dados da sessão
+      sessionStorage.setItem('user', JSON.stringify(r.data));
+    }).catch((error) => {
+      console.error('Failed to authenticate user:', error);
+      // Limpa sessão e redireciona
+      sessionStorage.removeItem('user');
+      navigate('/login');
+    });
+    fetchUnread();
+  }, [navigate, fetchUnread]);
       const ud = localStorage.getItem('user');
       if (ud) setUser(JSON.parse(ud));
       else navigate('/login');
@@ -55,11 +68,18 @@ export const DashboardLayout = () => {
 
   useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('user');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      // Chama backend para limpar cookies httpOnly
+      await authAPI.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Continua com logout local mesmo se backend falhar
+    } finally {
+      // Limpa sessão local
+      sessionStorage.removeItem('user');
+      navigate('/login');
+    }
   };
 
   // Cada item tem (1) roles permitidos e (2) module key (opcional) — se houver, item so aparece se modulo estiver habilitado

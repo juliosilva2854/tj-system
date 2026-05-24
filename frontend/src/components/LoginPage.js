@@ -37,12 +37,14 @@ export const LoginPage = () => {
         return;
       }
       
-      localStorage.setItem('token', response.data.access_token);
-      localStorage.setItem('refresh_token', response.data.refresh_token);
-      localStorage.setItem('user', JSON.stringify(user));
+      // Security: Apenas dados não-sensíveis em sessionStorage
+      // Tokens vêm automaticamente em httpOnly cookies (protegido contra XSS)
+      sessionStorage.setItem('user', JSON.stringify(user));
+      
       toast.success(`Bem-vindo, ${user.name}!`);
       navigate('/dashboard');
     } catch (error) {
+      console.error('Login failed:', error);
       toast.error(error.response?.data?.detail || 'Credenciais incorretas');
     } finally {
       setLoading(false);

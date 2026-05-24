@@ -1,15 +1,23 @@
 import axios from 'axios';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const api = axios.create({ baseURL: `${BACKEND_URL}/api` });
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
+const api = axios.create({ 
+  baseURL: `${BACKEND_URL}/api`,
+  withCredentials: true // IMPORTANTE: Envia cookies httpOnly automaticamente
 });
+
+// Interceptor: Cookies são enviados automaticamente, não precisa de Authorization header
+api.interceptors.request.use((config) => {
+  // Cookies httpOnly vêm automaticamente pelo navegador
+  return config;
+}, (error) => {
+  console.error('Request error:', error);
+  return Promise.reject(error);
+});
+
 api.interceptors.response.use((r) => r, (error) => {
   if (error.response?.status === 401) {
-    localStorage.removeItem('token'); localStorage.removeItem('user');
+    console.warn('Authentication failed (401). Redirecting to login...');
+    sessionStorage.removeItem('user');
     if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
   }
   return Promise.reject(error);
@@ -17,6 +25,7 @@ api.interceptors.response.use((r) => r, (error) => {
 
 export const authAPI = {
   login: (c) => api.post('/auth/login', c),
+  logout: () => api.post('/auth/logout'),
   register: (d) => api.post('/auth/register', d),
   me: () => api.get('/auth/me'),
   seed: () => api.post('/seed'),
