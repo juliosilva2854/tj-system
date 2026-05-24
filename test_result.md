@@ -305,3 +305,40 @@ agent_communication:
         NENHUM erro 5xx encontrado. Backend production-ready.
         
         PROXIMA FASE: Frontend (Stores, Transfers, Modules pages).
+    
+    - agent: "testing"
+      message: |
+        TESTES ADICIONAIS SOLICITADOS PELO USUARIO - TODOS PASSARAM COM SUCESSO
+        
+        Executados 8 cenários de teste específicos via URL publica (https://master-dashboard-9.preview.emergentagent.com):
+        
+        ✅ TEST 1: Login com username "admin.tj" + senha "Admin@2026"
+           - Retornou access_token e user corretamente
+           - User: Admin TJ | Role: admin | Email: admin@tj.sconnecta.com.br
+        
+        ✅ TEST 2: Login com email "master@sconnecta.com.br" + senha "Master@2026" (is_master: true)
+           - Retornou access_token e user corretamente
+           - User: Master Global | is_master_access: True | Role: master
+        
+        ✅ TEST 3: Login com credenciais inválidas
+           - Corretamente retornou 401 com mensagem "Credenciais incorretas"
+        
+        ✅ TEST 4: GET /api/auth/profile (autenticado)
+           - Profile recuperado com sucesso
+           - Dados: Nome, Email, Telefone, tenant_name, warehouse_name, store_names, enabled_modules
+        
+        ✅ TEST 5: PUT /api/auth/profile (atualizar nome e telefone)
+           - Atualização bem-sucedida, retorna mensagem de sucesso
+           - Valores originais restaurados após teste
+        
+        ✅ TEST 6: POST /api/auth/forgot-password com identifier "admin.tj"
+           - Retornou sucesso: "Se o usuario existir, um email foi enviado"
+        
+        ✅ TEST 7: GET /api/users (autenticado como admin)
+           - Lista de 3 usuários recuperada com sucesso
+           - Novos campos presentes: username=True, cpf=True, phone=True
+        
+        ✅ TEST 8: GET /api/health
+           - Status: healthy | DB: ok
+        
+        CONCLUSÃO: Todos os endpoints testados estão funcionando corretamente. Backend está operacional e respondendo conforme esperado.
