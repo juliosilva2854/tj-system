@@ -1,8 +1,8 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt && pip install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "backend/Dockerfile"
   },
   "deploy": {
     "startCommand": "uvicorn server:app --host 0.0.0.0 --port $PORT --workers 2",
