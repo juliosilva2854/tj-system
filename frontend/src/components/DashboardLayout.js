@@ -56,12 +56,6 @@ export const DashboardLayout = () => {
       navigate('/login');
     });
     fetchUnread();
-  }, [navigate, fetchUnread]);
-      const ud = localStorage.getItem('user');
-      if (ud) setUser(JSON.parse(ud));
-      else navigate('/login');
-    });
-    fetchUnread();
     const iv = setInterval(fetchUnread, 30000);
     return () => clearInterval(iv);
   }, [navigate, fetchUnread]);

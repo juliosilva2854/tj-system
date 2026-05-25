@@ -1,13 +1,28 @@
 """Dependencias compartilhadas do FastAPI."""
 import os
 from typing import Optional
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Cookie
 from auth import decode_token
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    if not authorization or not authorization.startswith('Bearer '):
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+    access_token: Optional[str] = Cookie(None),
+) -> dict:
+    """Aceita JWT via Authorization header (Bearer) OU cookie httpOnly access_token.
+
+    Cookie httpOnly e o canal preferido (protege contra XSS); o header fica como
+    fallback para clientes que nao usam cookies (curl, mobile, integracoes).
+    """
+    token: Optional[str] = None
+    if authorization and authorization.startswith('Bearer '):
+        token = authorization[7:]
+    elif access_token:
+        token = access_token
+
+    if not token:
         raise HTTPException(status_code=401, detail="Nao autenticado")
-    payload = decode_token(authorization[7:])
+
+    payload = decode_token(token)
     if not payload or payload.get('type') != 'access':
         raise HTTPException(status_code=401, detail="Token invalido ou expirado")
     return payload

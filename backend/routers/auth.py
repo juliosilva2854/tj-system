@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from datetime import datetime, timezone, timedelta
 from slowapi import Limiter
@@ -10,6 +11,24 @@ from models import UserCreate, UserLogin, gen_id, sanitize_str
 
 router = APIRouter(tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
+
+
+def _cookie_kwargs():
+    """Configuracao de cookies adaptada ao ambiente.
+
+    - Producao cross-domain (Cloudflare + Railway): SameSite=None; Secure
+    - Dev/preview same-origin: SameSite=Lax; Secure (HTTPS preview)
+    Controlado por COOKIE_SAMESITE e COOKIE_SECURE no .env.
+    """
+    samesite = os.environ.get('COOKIE_SAMESITE', 'lax').lower()
+    if samesite not in ('lax', 'strict', 'none'):
+        samesite = 'lax'
+    secure_env = os.environ.get('COOKIE_SECURE', 'true').lower()
+    secure = secure_env == 'true'
+    # SameSite=None exige Secure=True para o navegador aceitar
+    if samesite == 'none':
+        secure = True
+    return {"httponly": True, "secure": secure, "samesite": samesite}
 
 @router.post("/auth/login")
 @limiter.limit("10/minute")
@@ -36,38 +55,33 @@ async def login(request: Request, response: Response, creds: UserLogin):
     
     access = token_from_user_doc(doc)
     refresh = create_refresh_token(doc['id'])
-    
-    # Set httpOnly cookies para segurança contra XSS
-    response.set_cookie(
-        key="access_token",
-        value=access,
-        httponly=True,
-        secure=True,  # HTTPS only em produção
-        samesite="lax",
-        max_age=3600  # 1 hora
-    )
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=604800  # 7 dias
-    )
-    
+
+    # Set httpOnly cookies para seguranca contra XSS
+    cookie_opts = _cookie_kwargs()
+    response.set_cookie(key="access_token", value=access, max_age=3600, **cookie_opts)
+    response.set_cookie(key="refresh_token", value=refresh, max_age=604800, **cookie_opts)
+
     user_out = {k: doc.get(k) for k in [
         'id', 'email', 'name', 'username', 'cpf', 'phone', 'role', 'tenant_id', 
         'warehouse_id', 'warehouse_ids', 'store_ids', 'is_master_access',
         'profile_picture', 'permissions', 'managed_by', 'active', 'created_at'
     ] if k in doc}
-    
-    # Retorna tokens também no body para compatibilidade (pode ser removido depois)
-    return {"access_token": access, "refresh_token": refresh, "user": user_out}
+
+    # Tokens nao sao mais retornados no body. Autenticacao subsequente usa cookie httpOnly.
+    return {"user": user_out}
 
 @router.post("/auth/refresh")
-async def refresh_token(request: Request):
-    body = await request.json()
-    token = body.get('refresh_token')
+async def refresh_token(request: Request, response: Response):
+    """Renova access_token usando refresh_token (cookie httpOnly ou body)."""
+    # 1) Tenta refresh_token via cookie httpOnly (preferido)
+    token = request.cookies.get('refresh_token')
+    # 2) Fallback: aceita no body para integracoes nao-browser
+    if not token:
+        try:
+            body = await request.json()
+            token = body.get('refresh_token') if body else None
+        except Exception:
+            token = None
     if not token:
         raise HTTPException(status_code=400, detail="Refresh token obrigatorio")
     payload = decode_token(token)
@@ -77,7 +91,10 @@ async def refresh_token(request: Request):
     if not doc:
         raise HTTPException(status_code=401, detail="Usuario nao encontrado")
     access = token_from_user_doc(doc)
-    return {"access_token": access}
+    # Re-emite o cookie httpOnly de access_token
+    cookie_opts = _cookie_kwargs()
+    response.set_cookie(key="access_token", value=access, max_age=3600, **cookie_opts)
+    return {"message": "Token renovado"}
 
 @router.get("/auth/me")
 async def auth_me(user: dict = Depends(get_current_user)):
@@ -333,8 +350,10 @@ async def update_profile(data: dict, user: dict = Depends(get_current_user)):
 @router.post("/auth/logout")
 async def logout(response: Response):
     """Logout: limpa cookies httpOnly"""
-    response.delete_cookie(key="access_token")
-    response.delete_cookie(key="refresh_token")
+    cookie_opts = _cookie_kwargs()
+    # delete_cookie aceita path, domain, secure, samesite, httponly
+    response.delete_cookie(key="access_token", **cookie_opts)
+    response.delete_cookie(key="refresh_token", **cookie_opts)
     return {"message": "Logout realizado com sucesso"}
 
 @router.put("/auth/change-password")
