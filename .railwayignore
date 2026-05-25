@@ -1,0 +1,74 @@
+# Railway ignora arquivos que não são necessários para produção
+# Similar ao .gitignore mas específico para Railway builds
+
+# Development
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+*_test.py
+test_*.py
+
+# Environment
+.env.development
+.env.local
+.env.test
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend (não necessário no backend)
+frontend/
+node_modules/
+yarn.lock
+package.json
+*.lock
+
+# Logs
+*.log
+logs/
+
+# Docker (Railway usa próprio container)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Misc
+*.bak
+*.tmp
+*.temp
+.cache/

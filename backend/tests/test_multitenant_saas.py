@@ -9,7 +9,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://estoque-api.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://chat-emergent-9.preview.emergentagent.com').rstrip('/')
 API = f"{BASE_URL}/api"
 
 MASTER = ("master@sconnecta.com.br", "Master@2026")

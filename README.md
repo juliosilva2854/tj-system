@@ -9,7 +9,7 @@ Sistema completo de gestão empresarial com controle de estoque, transferências
 - [Pré-requisitos](#pré-requisitos)
 - [Instalação Local](#instalação-local)
 - [Executar com Docker](#executar-com-docker)
-- [Deploy Cloudflare](#deploy-cloudflare)
+- [Deploy em Produção](#-deploy-em-produção)
 - [Configuração](#configuração)
 - [Estrutura do Projeto](#estrutura-do-projeto)
 - [API Documentation](#api-documentation)
@@ -254,101 +254,125 @@ curl -X POST http://localhost:8001/api/seed
 
 ---
 
-## ☁️ Deploy com Cloudflare
+## 🚀 Deploy em Produção
 
-### Opção 1: Cloudflare Pages (Frontend) + Cloud Run (Backend)
+### Stack Recomendado: Railway + MongoDB Atlas + Cloudflare
 
-#### Frontend (Cloudflare Pages)
+**Arquitetura:**
+```
+Frontend (React)  →  Cloudflare Pages  →  tj.sconnecta.com.br
+Backend (FastAPI) →  Railway.app        →  api.sconnecta.com.br
+Database (Mongo)  →  MongoDB Atlas      →  privado
+```
 
-1. **Conecte seu Repositório**
-   - Vá para https://dash.cloudflare.com
-   - Workers & Pages > Create application > Pages
-   - Conecte ao GitHub: `juliosilva2854/tj-system`
+**Custo:** R$ 0,00/mês (tier gratuito) até ~1000 usuários
 
-2. **Configure Build**
-   ```
-   Build command: cd frontend && yarn install && yarn build
-   Build output directory: frontend/build
-   Root directory: /
-   ```
+### 📖 Documentação de Deploy
 
-3. **Variáveis de Ambiente**
-   ```
-   REACT_APP_BACKEND_URL=https://seu-backend.run.app
-   ```
+Este repositório inclui documentação completa para deploy em produção:
 
-4. **Custom Domain**
-   - Adicione: `tj.sconnecta.com.br`
-   - Adicione: `administrator.sconnecta.com.br`
+#### 🎯 Guias de Deploy
 
-#### Backend (Google Cloud Run / Railway / Render)
+1. **[DEPLOY_RAILWAY_COMPLETO.md](DEPLOY_RAILWAY_COMPLETO.md)** ⭐
+   - Guia passo a passo completo
+   - Railway + MongoDB Atlas + Cloudflare Pages
+   - Inclui troubleshooting e monitoramento
+   - **RECOMENDADO: Comece por aqui!**
 
-**Google Cloud Run:**
+2. **[DEPLOY_QUICK_REFERENCE.md](DEPLOY_QUICK_REFERENCE.md)**
+   - Referência rápida de comandos
+   - Variáveis de ambiente prontas
+   - Troubleshooting rápido
+
+3. **[DEPLOY_CHECKLIST_FINAL.md](DEPLOY_CHECKLIST_FINAL.md)**
+   - Checklist completo para print/preenchimento
+   - Validação passo a passo
+   - Pós-deploy e monitoramento
+
+4. **[CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md)**
+   - Guia detalhado do Cloudflare Pages
+   - Configuração de DNS e SSL
+   - Custom domains
+
+5. **[DEPLOY_PRODUCAO_SCONNECTA.md](DEPLOY_PRODUCAO_SCONNECTA.md)**
+   - Configurações específicas para sconnecta.com.br
+   - Cookies cross-domain
+   - CORS e segurança
+
+### ⚡ Quick Start - Deploy em 30 minutos
+
+#### 1. Gere os Secrets
 ```bash
-# Install gcloud CLI
-gcloud auth login
-
-# Build e Push
-cd backend
-gcloud builds submit --tag gcr.io/SEU-PROJECT/gestao-tj-backend
-
-# Deploy
-gcloud run deploy gestao-tj-backend \
-  --image gcr.io/SEU-PROJECT/gestao-tj-backend \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars MONGO_URL=mongodb+srv://...,JWT_SECRET=...,SMTP_USER=...,SMTP_PASSWORD=...
+python3 -c "import secrets; print('JWT_SECRET=' + secrets.token_urlsafe(32))"
+python3 -c "import secrets; print('SEED_SECRET=' + secrets.token_urlsafe(16))"
 ```
 
-**Railway (mais simples):**
-1. Vá para https://railway.app
-2. New Project > Deploy from GitHub
-3. Selecione o repositório
-4. Configure variáveis de ambiente
-5. Railway gera URL automaticamente
+#### 2. MongoDB Atlas (5 min)
+- Crie conta gratuita: https://www.mongodb.com/cloud/atlas/register
+- Crie cluster M0 (grátis)
+- Network Access: `0.0.0.0/0`
+- Connection string pronta
 
-### Opção 2: Cloudflare Workers (Fullstack)
+#### 3. Railway - Backend (10 min)
+- Login: https://railway.app (via GitHub)
+- New Project → Deploy from GitHub repo
+- Configure variáveis de ambiente (ver `.env.production.example`)
+- Deploy automático
 
-**Passo 1: Instale Wrangler**
+#### 4. Cloudflare Pages - Frontend (10 min)
+- Login: https://dash.cloudflare.com
+- Workers & Pages → Create → Connect to Git
+- Build: `cd frontend && yarn install && yarn build`
+- Output: `frontend/build`
+- Env var: `REACT_APP_BACKEND_URL=https://api.sconnecta.com.br`
+
+#### 5. Cloudflare DNS (5 min)
+```
+tj              CNAME  →  gestao-tj.pages.dev           (Proxied)
+administrator   CNAME  →  gestao-tj.pages.dev           (Proxied)
+api             CNAME  →  sua-url.up.railway.app        (Proxied)
+```
+
+### 📁 Arquivos de Configuração de Produção
+
+Este repositório inclui arquivos prontos para deploy:
+
 ```bash
-npm install -g wrangler
-wrangler login
+/app/
+├── railway.json                          # Configuração Railway (auto-detect)
+├── .railwayignore                        # Arquivos ignorados no build
+├── backend/
+│   ├── Dockerfile                        # Container do backend
+│   ├── .env.production.example           # Template de variáveis (Railway)
+│   └── requirements.txt                  # Dependências Python
+├── frontend/
+│   ├── Dockerfile                        # Container do frontend
+│   ├── .env.production.example           # Template de variáveis (Cloudflare)
+│   ├── nginx.frontend.conf               # Nginx config para SPA
+│   └── package.json                      # Dependências Node
+└── docker-compose.prod.yml               # Docker Compose produção
 ```
 
-**Passo 2: Configure Backend como Worker**
+**Importante:** Nunca commite arquivos `.env` com credenciais reais! Use os `.example` como template.
 
-Crie `backend/wrangler.toml`:
-```toml
-name = "gestao-tj-backend"
-main = "worker.js"
-compatibility_date = "2024-01-01"
+### 🔒 Segurança em Produção
 
-[vars]
-ENVIRONMENT = "production"
+- ✅ JWT_SECRET aleatório de 32+ bytes
+- ✅ CORS configurado com domínios específicos (não use `*`)
+- ✅ Cookies HttpOnly + SameSite=None + Secure para cross-domain
+- ✅ MongoDB com autenticação e Network Access restrito
+- ✅ SEED_SECRET para proteger endpoint `/api/seed`
+- ✅ SSL/TLS Full (strict) no Cloudflare
+- ✅ Senhas de app do Gmail (não senha principal)
 
-[[d1_databases]]
-binding = "DB"
-database_name = "gestao-tj"
-database_id = "seu-database-id"
-```
+### 📊 URLs Finais em Produção
 
-**Passo 3: Deploy**
-```bash
-cd backend
-wrangler deploy
-```
+Após deploy completo, seu sistema estará acessível em:
 
-### Configuração de DNS (Cloudflare)
-
-1. **Adicione Registros DNS:**
-
-```
-Type    Name                Value                       Proxy
-CNAME   tj                  gestao-tj.pages.dev         ✓ Proxied
-CNAME   administrator       gestao-tj.pages.dev         ✓ Proxied
-CNAME   api                 backend-url.run.app         ✓ Proxied
-```
+- 🌐 **Portal Principal:** https://tj.sconnecta.com.br
+- 👨‍💼 **Portal Master:** https://administrator.sconnecta.com.br
+- 🔌 **API Backend:** https://api.sconnecta.com.br
+- 📄 **API Docs:** https://api.sconnecta.com.br/docs
 
 2. **Configure SSL/TLS:**
    - SSL/TLS > Overview > Full (strict)
