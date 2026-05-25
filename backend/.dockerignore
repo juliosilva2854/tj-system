@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Testing
+tests/
+test_*.py
+*_test.py
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Frontend (não necessário no backend)
+frontend/
+node_modules/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
