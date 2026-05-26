@@ -1,14 +1,14 @@
-# Backend Dockerfile - Gestao TJ (Railway Ready - 100% Standalone)
-# Sistema funciona SEM dependências do Emergent
-# Railway build context = raiz do repositório
+# Backend Dockerfile - Gestao TJ (Railway - Porta Fixa 8001)
+# Sistema 100% standalone - Porta fixa para confiabilidade
 
 FROM python:3.12-slim
 
-# Railway 2025 recommended environment variables
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PORT=8001
 
 WORKDIR /app
 
@@ -31,12 +31,12 @@ RUN pip install --upgrade pip && \
 # Copy código do backend/ para /app
 COPY backend/ ./
 
-# Railway injeta PORT via environment variable
+# Porta fixa 8001
 EXPOSE 8001
 
-# Health check
+# Health check na porta 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:${PORT:-8001}/api/health || exit 1
+    CMD curl -fsS http://localhost:8001/api/health || exit 1
 
-# Start command com PORT dinâmico
-CMD ["sh", "-c", "python -m uvicorn server:app --host 0.0.0.0 --port ${PORT:-8001} --workers 2"]
+# Start command com porta fixa 8001
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
