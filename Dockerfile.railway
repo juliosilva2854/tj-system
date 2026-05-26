@@ -1,6 +1,6 @@
-# Backend Dockerfile - Gestao TJ (Railway Ready - Na Raiz do Repo)
-# Este Dockerfile funciona quando colocado NA RAIZ do repositório
-# Railway build context = raiz, então paths devem ser explícitos
+# Backend Dockerfile - Gestao TJ (Railway Ready - 100% Standalone)
+# Sistema funciona SEM dependências do Emergent
+# Railway build context = raiz do repositório
 
 FROM python:3.12-slim
 
@@ -21,15 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements EXPLICITAMENTE do backend/ (build context é a raiz)
+# Copy requirements do backend/
 COPY backend/requirements.txt ./requirements.txt
 
-# Install Python dependencies
+# Install Python dependencies (SEM emergentintegrations)
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy todo o código do backend/ para /app
+# Copy código do backend/ para /app
 COPY backend/ ./
 
 # Railway injeta PORT via environment variable
@@ -39,5 +38,5 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:${PORT:-8001}/api/health || exit 1
 
-# CMD que Railway pode substituir se necessário
+# Start command com PORT dinâmico
 CMD ["sh", "-c", "python -m uvicorn server:app --host 0.0.0.0 --port ${PORT:-8001} --workers 2"]

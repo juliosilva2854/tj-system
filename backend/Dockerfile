@@ -1,5 +1,5 @@
-# Backend Dockerfile - Gestao TJ (Railway 2025 Optimized)
-# Based on Railway best practices for Python/FastAPI apps
+# Backend Dockerfile - Gestao TJ (100% Standalone - Railway 2025)
+# Sistema funciona SEM dependências do Emergent
 
 FROM python:3.12-slim
 
@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install only essential system dependencies (Railway best practice)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libxml2-dev libxslt1-dev \
@@ -20,25 +20,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy ONLY requirements first (better Docker layer caching)
+# Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies (SEM emergentintegrations)
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Railway will inject PORT via environment variable
-# No hardcoded port - Railway 2025 requirement
+# Railway injeta PORT via environment variable
 EXPOSE 8001
 
-# Health check endpoint (Railway 2025 best practice)
+# Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:${PORT:-8001}/api/health || exit 1
 
-# Use exec form to handle signals properly (Docker best practice 2025)
-# Railway will use PORT from environment
+# Start command com PORT dinâmico
 CMD ["sh", "-c", "python -m uvicorn server:app --host 0.0.0.0 --port ${PORT:-8001} --workers 2"]
