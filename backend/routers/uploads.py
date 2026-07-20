@@ -10,8 +10,9 @@ from deps import get_current_user
 
 router = APIRouter(tags=["uploads"])
 
-# Diretório para uploads
-UPLOAD_DIR = Path("/app/backend/uploads/profiles")
+# Diretório para uploads dinâmico (Resolve o erro de permissão no Render)
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads" / "profiles"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
