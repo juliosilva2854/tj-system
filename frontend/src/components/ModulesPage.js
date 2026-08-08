@@ -25,7 +25,10 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const canManage = ['master', 'admin'].includes(me.role);
+  // A CORREÇÃO ENTRA AQUI: Agora ele lê as permissões do backend e a flag de Master
+  const isMaster = me.role === 'master' || me.is_master_access;
+  const canView = isMaster || (me.permissions && me.permissions.view_modules) || ['master', 'admin'].includes(me.role);
+  const canManage = isMaster || (me.permissions && me.permissions.manage_modules) || ['master', 'admin'].includes(me.role);
 
   useEffect(() => {
     (async () => {
@@ -68,7 +71,7 @@ export const ModulesPage = () => {
   const sName = (id) => stores.find(s => s.id === id)?.name || '—';
 
   if (loading) return <div className="p-6 text-zinc-500">Carregando...</div>;
-  if (!canManage) return <div className="p-6 text-zinc-500">Sem permissao para acessar esta tela.</div>;
+  if (!canView) return <div className="p-6 text-zinc-500">Sem permissao para acessar esta tela.</div>;
   if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum deposito PAI cadastrado ainda.</div>;
 
   return (
@@ -102,9 +105,12 @@ export const ModulesPage = () => {
               <p className="text-xs font-semibold uppercase text-zinc-500">Modulos habilitados</p>
               <p className="text-sm font-medium text-zinc-900">{warehouses.find(w => w.id === selected)?.name}</p>
             </div>
-            <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
-              <Save className="h-4 w-4 mr-1" />{saving ? 'Salvando...' : 'Salvar'}
-            </Button>
+            {/* Esconde o botao de salvar se o usuario tiver apenas permissao de visualizacao */}
+            {canManage && (
+              <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
+                <Save className="h-4 w-4 mr-1" />{saving ? 'Salvando...' : 'Salvar'}
+              </Button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -114,7 +120,13 @@ export const ModulesPage = () => {
                   <ShieldCheck className={`h-4 w-4 ${enabled.includes(m) ? 'text-indigo-600' : 'text-zinc-300'}`} />
                   <span className="text-sm text-zinc-700">{MODULE_LABELS[m] || m}</span>
                 </div>
-                <input type="checkbox" checked={enabled.includes(m)} onChange={() => toggle(m)} className="h-4 w-4 accent-indigo-600" />
+                <input 
+                  type="checkbox" 
+                  checked={enabled.includes(m)} 
+                  onChange={() => toggle(m)} 
+                  disabled={!canManage}
+                  className="h-4 w-4 accent-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed" 
+                />
               </label>
             ))}
           </div>
