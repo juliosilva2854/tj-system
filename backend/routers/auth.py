@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from datetime import datetime, timezone, timedelta
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -215,8 +215,8 @@ async def register(data: UserCreate, user: dict = Depends(require_roles("master"
 # === FORGOT PASSWORD ===
 @router.post("/auth/forgot-password")
 @limiter.limit("3/minute")
-async def forgot_password(request: Request, data: dict):
-    """Envia email com link de recuperação de senha"""
+async def forgot_password(request: Request, data: dict, background_tasks: BackgroundTasks):
+    """Envia email com link de recuperação de senha (envio em background para nao travar o request)"""
     from email_service import send_email, build_password_reset_email
     import secrets
     
@@ -252,9 +252,9 @@ async def forgot_password(request: Request, data: dict):
     frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
     reset_url = f"{frontend_url}/reset-password?token={token}"
     
-    # Envia email
+    # Envia email em BACKGROUND: o request retorna imediatamente (evita "carregando infinito")
     subject, html = build_password_reset_email(reset_url, user['name'])
-    send_email(user['email'], subject, html)
+    background_tasks.add_task(send_email, user['email'], subject, html)
     
     return {"message": "Se o usuario existir, um email foi enviado"}
 

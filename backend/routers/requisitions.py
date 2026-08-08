@@ -7,6 +7,7 @@ from permissions import (
     verify_tenant_access, get_user_warehouse_scope,
     CAN_APPROVE_REQUISITION, ADMIN_ROLES,
 )
+from notifications_service import notify_users, check_low_stock, tenant_user_ids
 
 router = APIRouter(tags=["requisitions"])
 
@@ -33,6 +34,14 @@ async def create_requisition(data: RequisitionCreate, user: dict = Depends(get_c
     await db.requisitions.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "requisicao", doc['id'], tid,
                     warehouse_id=wid, store_id=wh.get('store_id', ''))
+    # Notifica aprovadores do tenant (admin/gerentes/logistica)
+    approvers = await tenant_user_ids(tid, roles={"admin", "gerente_geral", "gerente_logistica", "logistica"})
+    await notify_users(
+        approvers, "requisition_created",
+        "Nova requisicao para aprovar",
+        f"{wh['name']} criou uma requisicao com {len(data.items)} item(ns).",
+        ntype="info", meta={"requisition_id": doc['id']}, exclude_user_id=user['sub'],
+    )
     return doc
 
 @router.get("/requisitions")
@@ -85,6 +94,15 @@ async def approve_requisition(rid: str, user: dict = Depends(require_roles(*CAN_
     await db.requisitions.update_one({"id": rid}, {"$set": {"status": "approved", "resolved_at": now, "resolved_by": user['sub']}})
     await audit.log(user['sub'], user['email'], "APROVAR", "requisicao", rid, req['tenant_id'],
                     warehouse_id=pai_id, store_id=req.get('store_id', ''))
+    # Notifica quem criou a requisicao + verifica estoque baixo no PAI
+    await notify_users(
+        [req.get('created_by')], "requisition_resolved",
+        "Requisicao aprovada",
+        "Sua requisicao foi aprovada e os itens foram transferidos.",
+        ntype="success", meta={"requisition_id": rid}, exclude_user_id=user['sub'],
+    )
+    for item in req['items']:
+        await check_low_stock(req['tenant_id'], pai_id, item['product_id'])
     return {"message": "Requisicao aprovada. Itens transferidos."}
 
 @router.post("/requisitions/{rid}/reject")
@@ -97,4 +115,10 @@ async def reject_requisition(rid: str, user: dict = Depends(require_roles(*CAN_A
     now = datetime.now(timezone.utc).isoformat()
     await db.requisitions.update_one({"id": rid}, {"$set": {"status": "rejected", "resolved_at": now, "resolved_by": user['sub']}})
     await audit.log(user['sub'], user['email'], "REJEITAR", "requisicao", rid, req['tenant_id'])
+    await notify_users(
+        [req.get('created_by')], "requisition_resolved",
+        "Requisicao rejeitada",
+        "Sua requisicao foi rejeitada.",
+        ntype="error", meta={"requisition_id": rid}, exclude_user_id=user['sub'],
+    )
     return {"message": "Requisicao rejeitada"}

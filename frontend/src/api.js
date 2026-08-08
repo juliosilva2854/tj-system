@@ -127,6 +127,8 @@ export const notificationsAPI = {
   getUnreadCount: () => api.get('/notifications/unread-count'),
   markRead: (id) => api.patch(`/notifications/${id}/read`),
   markAllRead: () => api.post('/notifications/read-all'),
+  getPreferences: () => api.get('/notifications/preferences'),
+  updatePreferences: (preferences) => api.put('/notifications/preferences', { preferences }),
 };
 
 export const getSubdomain = () => {

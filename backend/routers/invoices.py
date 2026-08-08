@@ -6,6 +6,7 @@ from deps import get_current_user, require_roles
 from models import InvoiceCreate, OCRRequest, gen_id
 from permissions import verify_tenant_access, verify_warehouse_access, CAN_MANAGE_INVOICES
 from nfe_parser import parse_nfe_xml
+from notifications_service import notify_users, tenant_user_ids
 
 router = APIRouter(tags=["invoices"])
 
@@ -56,6 +57,14 @@ async def create_invoice(data: InvoiceCreate, user: dict = Depends(require_roles
     await db.invoices.insert_one(doc); doc.pop("_id", None)
     await audit.log(user['sub'], user['email'], "CRIAR", "nota_fiscal", doc['id'], tid,
                     warehouse_id=data.warehouse_id or '')
+    # Notifica gestores do tenant sobre nota pendente
+    managers = await tenant_user_ids(tid, roles={"admin", "gerente_geral", "gerente_logistica", "logistica"})
+    await notify_users(
+        managers, "invoice_pending",
+        "Nota fiscal pendente",
+        f"Nota {data.invoice_number} de {data.supplier_name} (R$ {data.total_value:.2f}) esta pendente.",
+        ntype="info", meta={"invoice_id": doc['id']}, exclude_user_id=user['sub'],
+    )
     return doc
 
 @router.get("/invoices")

@@ -6,6 +6,7 @@ from permissions import (
     verify_tenant_access, verify_warehouse_access, get_user_warehouse_scope, ADMIN_ROLES,
 )
 from models import gen_id, InventoryAdjust
+from notifications_service import check_low_stock
 
 router = APIRouter(tags=["inventory"])
 
@@ -95,4 +96,6 @@ async def adjust_inventory(
     await audit.log(user['sub'], user['email'], "AJUSTAR", "estoque",
                     f"{data.product_id}:{data.warehouse_id}", target_tid, changes,
                     warehouse_id=data.warehouse_id)
+    # Verifica estoque baixo apos o ajuste
+    await check_low_stock(target_tid, data.warehouse_id, data.product_id)
     return {"message": "Estoque ajustado"}

@@ -6,38 +6,56 @@ from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
-def send_email(to: str, subject: str, html_content: str) -> bool:
-    """Envia email usando Gmail SMTP"""
+# Timeout curto para nunca deixar o request "pendurado" (ex.: quando o host
+# bloqueia a porta SMTP de saida, como acontece no Render).
+SMTP_TIMEOUT = int(os.environ.get('SMTP_TIMEOUT', '15'))
+
+
+def _send_via_resend(to: str, subject: str, html_content: str) -> bool:
+    """Envia via Resend (API HTTP). Funciona em hosts que bloqueiam SMTP (Render)."""
+    import resend
+    resend.api_key = os.environ.get('RESEND_API_KEY')
+    sender = os.environ.get('SENDER_EMAIL') or os.environ.get('SMTP_USER') or 'onboarding@resend.dev'
+    params = {"from": sender, "to": [to], "subject": subject, "html": html_content}
+    result = resend.Emails.send(params)
+    logger.info(f"Email (resend) enviado para {to}: id={getattr(result, 'get', lambda k: None)('id') if isinstance(result, dict) else result}")
+    return True
+
+
+def _send_via_smtp(to: str, subject: str, html_content: str) -> bool:
+    """Fallback via SMTP (Gmail). Usa timeout para nunca travar o request."""
     smtp_user = os.environ.get('SMTP_USER')
     smtp_password = os.environ.get('SMTP_PASSWORD')
     smtp_host = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
     smtp_port = int(os.environ.get('SMTP_PORT', '587'))
-    
+
     if not smtp_user or not smtp_password:
-        logger.warning("Gmail SMTP not configured (SMTP_USER or SMTP_PASSWORD missing). Email not sent.")
+        logger.warning("SMTP nao configurado (SMTP_USER/SMTP_PASSWORD ausentes). Email nao enviado.")
         return False
-    
+
+    message = MIMEMultipart('alternative')
+    message['Subject'] = subject
+    message['From'] = smtp_user
+    message['To'] = to
+    message.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=SMTP_TIMEOUT) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.send_message(message)
+    logger.info(f"Email (smtp) enviado para {to}")
+    return True
+
+
+def send_email(to: str, subject: str, html_content: str) -> bool:
+    """Envia email. Prefere Resend (API HTTP) se RESEND_API_KEY existir,
+    senao usa SMTP com timeout. Nunca lanca excecao para o chamador."""
     try:
-        # Criar mensagem
-        message = MIMEMultipart('alternative')
-        message['Subject'] = subject
-        message['From'] = smtp_user
-        message['To'] = to
-        
-        # Adicionar conteúdo HTML
-        html_part = MIMEText(html_content, 'html', 'utf-8')
-        message.attach(html_part)
-        
-        # Conectar ao servidor SMTP e enviar
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(message)
-        
-        logger.info(f"Email sent successfully to {to}")
-        return True
+        if os.environ.get('RESEND_API_KEY'):
+            return _send_via_resend(to, subject, html_content)
+        return _send_via_smtp(to, subject, html_content)
     except Exception as e:
-        logger.error(f"Failed to send email to {to}: {e}")
+        logger.error(f"Falha ao enviar email para {to}: {e}")
         return False
 
 

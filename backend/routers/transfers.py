@@ -10,6 +10,7 @@ from permissions import (
     verify_tenant_access, verify_warehouse_access, get_user_warehouse_scope,
     CAN_TRANSFER_BETWEEN_STORES, ADMIN_ROLES,
 )
+from notifications_service import notify_users, check_low_stock, warehouse_watcher_ids
 
 router = APIRouter(tags=["transfers"])
 
@@ -86,6 +87,16 @@ async def create_transfer(data: TransferCreate, user: dict = Depends(require_rol
                     doc['id'], target_tid,
                     {"de": src['name'], "para": dst['name'], "itens": len(data.items)},
                     warehouse_id=data.from_warehouse_id, store_id=src.get('store_id', ''))
+    # Notifica observadores do deposito de destino + verifica estoque baixo na origem
+    receivers = await warehouse_watcher_ids(target_tid, dst)
+    await notify_users(
+        receivers, "transfer_received",
+        "Transferencia recebida",
+        f"{dst['name']} recebeu {len(data.items)} item(ns) de {src['name']}.",
+        ntype="info", meta={"transfer_id": doc['id']}, exclude_user_id=user['sub'],
+    )
+    for item in data.items:
+        await check_low_stock(target_tid, data.from_warehouse_id, item.product_id)
     return doc
 
 @router.get("/transfers")

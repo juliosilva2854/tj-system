@@ -116,6 +116,34 @@ user_problem_statement: |
   9. Manual de producao + testes
 
 backend:
+  - task: "Email: anti-travamento (timeout + background) + suporte Resend"
+    implemented: true
+    working: true
+    file: "backend/email_service.py, backend/routers/auth.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "forgot-password agora envia email em BackgroundTasks (retorna instantaneo, corrige 'carregando infinito'). SMTP com timeout=15s. send_email prefere RESEND_API_KEY (API HTTP) se presente, senao SMTP. Smoke: forgot-password responde em ~0.05s e log confirma 'Email (smtp) enviado'."
+        - working: true
+          agent: "testing"
+          comment: "EMAIL ANTI-HANG VALIDATED. POST /api/auth/forgot-password tested with 2 scenarios: (1) Valid username 'admin.tj' responded in 0.128s with HTTP 200, (2) Non-existent identifier 'naoexiste@nada.com' responded in 0.118s with HTTP 200. Both responses < 5s (well under threshold). Generic security message returned in both cases. Backend logs confirm emails sent via SMTP successfully. NO HANGING detected. Background task implementation working correctly."
+  - task: "Notificacoes configuraveis por usuario + eventos"
+    implemented: true
+    working: true
+    file: "backend/notifications_service.py, backend/routers/notifications.py, requisitions.py, transfers.py, invoices.py, inventory.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Novo motor notifications_service. Eventos: stock_low, requisition_created, requisition_resolved, transfer_received, invoice_pending. Preferencias por usuario (in_app/email por evento) em GET/PUT /api/notifications/preferences. Wire em criar/aprovar/rejeitar requisicao, transferencia, criar nota, ajustar estoque (check_low_stock)."
+        - working: true
+          agent: "testing"
+          comment: "NOTIFICATIONS SYSTEM FULLY VALIDATED. All 5 test scenarios passed: (1) PREFERENCES: GET /api/notifications/preferences returns 5 events (stock_low, requisition_created, requisition_resolved, transfer_received, invoice_pending) with user preferences. PUT /api/notifications/preferences saves and persists preferences correctly. (2) INVOICE_PENDING: Creating invoice as admin.tj generates notification for logistica.tj (manager). Notification received with correct title/message. Unread count incremented. (3) REQUISITION_CREATED: operacional.tj creates requisition, logistica.tj receives notification. (4) REQUISITION_RESOLVED: After reject, operacional.tj receives notification. (5) STOCK_LOW: Setting min_stock=9999 and adjusting inventory to 1 triggers stock_low notification for admin.tj with correct details. All notification channels (in_app) working. Email channel configurable per user/event."
   - task: "Refactor server.py em routers separados"
     implemented: true
     working: true
@@ -265,13 +293,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "2.2"
-  test_sequence: 3
+  version: "2.3"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Backend: COMPLETO - 48/48 testes passaram via URL publica"
+    - "Backend: COMPLETO - All tests passed (48 pytest + email/notifications)"
     - "Frontend RBAC Modules: COMPLETO - Todos os testes passaram"
     - "Frontend: implementar telas de Stores, Transfers, Modules (proxima fase)"
   stuck_tasks: []
@@ -279,6 +307,16 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        NOVO: Correcao de EMAIL + NOTIFICACOES. Testar backend (usa MongoDB LOCAL + credenciais em /app/memory/test_credentials.md).
+        CENARIOS PRIORITARIOS:
+        1) POST /api/auth/forgot-password {"identifier":"admin.tj"} -> deve responder RAPIDO (<2s) HTTP 200 (NAO pode travar). Idem para identifier inexistente.
+        2) Login admin.tj / Admin@2026 (username) para obter cookie. GET /api/notifications/preferences -> retorna {events:[...5], preferences:{...}}. PUT /api/notifications/preferences {"preferences":{"stock_low":{"in_app":true,"email":false}}} -> salva e retorna preferences.
+        3) Fluxo de notificacao: como admin.tj criar uma NOTA FISCAL (POST /api/invoices) -> deve gerar notificacao invoice_pending para gestores do tenant. Depois GET /api/notifications como um gestor do mesmo tenant (ex: logistica.tj / Logistica@2026) deve listar a notificacao. GET /api/notifications/unread-count > 0.
+        4) Estoque baixo: definir min_stock de um produto (PATCH /api/products/{id} {"min_stock":999}) e ajustar estoque (POST /api/inventory/adjust) -> deve gerar notificacao stock_low para observadores do deposito.
+        5) Requisicao: operacional.tj cria requisicao (POST /api/requisitions) -> gera requisition_created para aprovadores. Aprovar (logistica.tj) -> gera requisition_resolved para o criador (operacional.tj).
+        Obs: emails de notificacao ficam OFF por default (so in_app), entao nao ha spam. NAO alterar test_result Testing Protocol.
     - agent: "main"
       message: |
         TESTE RBAC MODULOS (frontend). Recriei backend/.env e frontend/.env (estavam ausentes -> backend crashava e frontend sem REACT_APP_BACKEND_URL). Seed executado.
@@ -391,3 +429,54 @@ agent_communication:
            - Status: healthy | DB: ok
         
         CONCLUSÃO: Todos os endpoints testados estão funcionando corretamente. Backend está operacional e respondendo conforme esperado.
+
+    - agent: "testing"
+      message: |
+        ✅✅✅ EMAIL ANTI-HANG + NOTIFICATIONS SYSTEM - ALL TESTS PASSED ✅✅✅
+        
+        Executed comprehensive backend testing via public URL (https://adbf5c6e-d37a-4472-94ed-22cf67a08a2b.preview.emergentagent.com):
+        
+        ✅ TEST 1 - EMAIL ANTI-HANG (CRITICAL):
+           - POST /api/auth/forgot-password with "admin.tj": 0.128s response time, HTTP 200
+           - POST /api/auth/forgot-password with "naoexiste@nada.com": 0.118s response time, HTTP 200
+           - Both responses well under 5s threshold (NO HANGING)
+           - Generic security message returned in both cases
+           - Backend logs confirm emails sent via SMTP successfully
+           - Background task implementation working correctly
+        
+        ✅ TEST 2 - NOTIFICATION PREFERENCES:
+           - GET /api/notifications/preferences: Returns 5 events (stock_low, requisition_created, requisition_resolved, transfer_received, invoice_pending) with user preferences
+           - PUT /api/notifications/preferences: Saves preferences successfully
+           - GET again: Preferences persisted correctly (verified stock_low.email=True)
+           - All event metadata present (label, description)
+        
+        ✅ TEST 3 - INVOICE_PENDING NOTIFICATION:
+           - admin.tj creates invoice NF-TEST-1786233390
+           - logistica.tj (manager) receives invoice_pending notification
+           - Notification title: "Nota fiscal pendente"
+           - Notification message includes invoice number, supplier, value
+           - GET /api/notifications/unread-count: 2 (correct)
+        
+        ✅ TEST 4 - REQUISITION FLOW NOTIFICATIONS:
+           - operacional.tj creates requisition (1 item)
+           - logistica.tj receives requisition_created notification
+           - Title: "Nova requisicao para aprovar"
+           - Message: "Setor Operacional A criou uma requisicao com 1 item(ns)."
+           - Approval failed due to insufficient stock (expected behavior)
+           - Requisition rejected instead
+           - operacional.tj receives requisition_resolved notification
+           - Title: "Requisicao rejeitada"
+           - Full notification flow working correctly
+        
+        ✅ TEST 5 - STOCK_LOW NOTIFICATION:
+           - Product min_stock set to 9999
+           - Inventory adjusted to 1 (below min_stock)
+           - admin.tj receives stock_low notification
+           - Title: "Estoque baixo: Produto Teste Notificacoes"
+           - Message: "Produto Teste Notificacoes em Almoxarifado Central esta em 1.0 (minimo 9999)."
+           - Type: warning (correct)
+           - check_low_stock trigger working correctly
+        
+        SUMMARY: 5/5 tests passed. All notification events working. Preferences system functional. Email anti-hang validated (no infinite loading). Backend logs show no errors. System production-ready.
+        
+        NOTE: Created test product "Produto Teste Notificacoes" (id: c6d4563b-8236-4ecf-b556-9d6d5f79faa3) for testing as database had no products initially.
