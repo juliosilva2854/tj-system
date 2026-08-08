@@ -237,6 +237,20 @@ backend:
           comment: "Executado pytest contra URL publica (https://modules-access-1.preview.emergentagent.com): 48/48 testes passaram em 13.22s. Cobertura completa: auth (8 testes), RBAC (3), isolation (3), warehouses (3), requisitions (7), suppliers/invoices (2), dashboard/reports (3), validation (3), stores/managers (4), transfers (5), modules (5), audit (2). Nenhum erro 5xx ou 403/422 inesperado."
 
 frontend:
+  - task: "RBAC ModulesPage - helper centralizado auth.js"
+    implemented: true
+    working: true
+    file: "frontend/src/components/ModulesPage.js, frontend/src/auth.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "auth.js centralizado (getUser/canManageModules) integrado no ModulesPage. Admin/master devem carregar a tela; demais cargos veem 'Sem permissao para acessar esta tela.'. .env de backend/frontend recriados (estavam ausentes)."
+        - working: true
+          agent: "testing"
+          comment: "RBAC MODULES PAGE - TODOS OS TESTES PASSARAM. TEST 1 (ADMIN): Login admin.tj bem-sucedido, navegou para /dashboard/modules, elemento data-testid='modules-page' PRESENTE, heading 'Configuração de Módulos' presente, mensagem 'Sem permissão' AUSENTE. Tela completa carregada com lista de PAIs, módulos habilitados (15 módulos), botão Salvar visível. Sidebar mostra menu 'Modulos'. TEST 2 (OPERACIONAL): Login operacional.tj bem-sucedido, navegou DIRETO para /dashboard/modules, mensagem 'Sem permissão para acessar esta tela.' PRESENTE, elemento data-testid='modules-page' AUSENTE. Sidebar NÃO mostra menu 'Modulos' (corretamente oculto). RBAC funcionando perfeitamente: admin pode acessar/gerenciar módulos, operacional é corretamente bloqueado."
   - task: "Telas: Stores, Transfers, Modules"
     implemented: false
     working: "NA"
@@ -251,19 +265,54 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "2.1"
-  test_sequence: 2
+  version: "2.2"
+  test_sequence: 3
   run_ui: false
 
 test_plan:
   current_focus:
     - "Backend: COMPLETO - 48/48 testes passaram via URL publica"
+    - "Frontend RBAC Modules: COMPLETO - Todos os testes passaram"
     - "Frontend: implementar telas de Stores, Transfers, Modules (proxima fase)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        TESTE RBAC MODULOS (frontend). Recriei backend/.env e frontend/.env (estavam ausentes -> backend crashava e frontend sem REACT_APP_BACKEND_URL). Seed executado.
+        Validar via UI no dominio de preview:
+        1) Login ADMIN username `admin.tj` / senha `Admin@2026` -> ir a /dashboard/modules -> DEVE carregar a tela (data-testid="modules-page"), NAO deve aparecer "Sem permissao".
+        2) Login OPERACIONAL username `operacional.tj` / senha `Operacional@2026` -> navegar direto para /dashboard/modules -> DEVE aparecer "Sem permissao para acessar esta tela." (operacional nao ve o link no menu).
+        Obs: MASTER nao pode logar no dominio de preview (bloqueado pelo frontend, exige subdominio administrator.*). Testar acesso "permitido" via ADMIN.
+    - agent: "testing"
+      message: |
+        ✓✓✓ RBAC MODULES PAGE - TODOS OS TESTES PASSARAM ✓✓✓
+        
+        Executados 2 cenários de teste via Playwright no domínio público (https://adbf5c6e-d37a-4472-94ed-22cf67a08a2b.preview.emergentagent.com):
+        
+        ✅ TEST 1 - ADMIN (ALLOWED): admin.tj / Admin@2026
+           - Login bem-sucedido, redirecionado para /dashboard
+           - Navegou para /dashboard/modules
+           - ✓ Elemento data-testid="modules-page" PRESENTE
+           - ✓ Heading "Configuração de Módulos" presente
+           - ✓ Mensagem "Sem permissão para acessar esta tela." AUSENTE
+           - ✓ Tela completa carregada: lista de PAIs (Almoxarifado Central), 15 módulos habilitados, botão Salvar
+           - ✓ Sidebar mostra menu "Modulos" (visível para admin)
+        
+        ✅ TEST 2 - OPERACIONAL (NOT ALLOWED): operacional.tj / Operacional@2026
+           - Login bem-sucedido, redirecionado para /dashboard
+           - Navegou DIRETO para /dashboard/modules (URL direta)
+           - ✓ Mensagem "Sem permissão para acessar esta tela." PRESENTE (texto vermelho)
+           - ✓ Elemento data-testid="modules-page" AUSENTE
+           - ✓ Sidebar NÃO mostra menu "Modulos" (corretamente oculto para operacional)
+           - ✓ Sidebar mostra apenas: Dashboard, Estoque, Requisicoes, Alertas, Auditoria, Guia
+        
+        CONCLUSÃO: RBAC funcionando perfeitamente. Admin pode acessar e gerenciar módulos. Operacional é corretamente bloqueado com mensagem apropriada. Visibilidade do menu sidebar também controlada corretamente por role.
+        
+        Screenshots salvos: test1_admin_modules_page.png, test2_operacional_permission_denied.png
+        Nenhum erro de console ou rede detectado.
     - agent: "main"
       message: |
         FASE 1 BACKEND COMPLETA. Refatorei server.py monolítico (929 linhas) em 18 routers
