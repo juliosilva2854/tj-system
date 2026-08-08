@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any, Optional
 
 # Use the public backend URL from frontend/.env
-BASE_URL = "https://chat-emergent-9.preview.emergentagent.com"
+BASE_URL = "https://modules-access-1.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
 def print_section(title: str):

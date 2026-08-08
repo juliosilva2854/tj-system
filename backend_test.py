@@ -8,7 +8,7 @@ import json
 import requests
 from typing import Dict, Any
 
-BASE_URL = "https://chat-emergent-9.preview.emergentagent.com"
+BASE_URL = "https://modules-access-1.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
 # Test credentials from /app/memory/test_credentials.md

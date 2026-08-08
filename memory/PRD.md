@@ -51,5 +51,5 @@
 
 ## Status atual
 - Auth HttpOnly cookie: implementado e testado (100%)
-- Sistema funcional em preview: https://chat-emergent-9.preview.emergentagent.com
+- Sistema funcional em preview: https://modules-access-1.preview.emergentagent.com
 - Pronto para deploy em sconnecta.com.br
