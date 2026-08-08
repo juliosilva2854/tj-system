@@ -24,12 +24,12 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Verificação segura de privilégios administrativos
+  // Verificação segura e flexível (aceita master, admin, administrador, independentemente de maiúsculas/minúsculas)
   const role = String(me.role || '').toLowerCase();
-  const isAdminOrMaster = role === 'master' || role === 'admin' || role === 'administrador' || me.is_master_access === true;
+  const canManage = role === 'master' || role === 'admin' || role === 'administrador' || me.is_master_access === true;
 
   useEffect(() => {
-    if (!isAdminOrMaster) {
+    if (!canManage) {
       setLoading(false);
       return;
     }
@@ -47,7 +47,7 @@ export const ModulesPage = () => {
       } catch { toast.error('Erro ao carregar dados'); }
       finally { setLoading(false); }
     })();
-  }, [isAdminOrMaster]);
+  }, [canManage]);
 
   const onSelect = (wid) => {
     setSelected(wid);
@@ -72,12 +72,7 @@ export const ModulesPage = () => {
   const sName = (id) => stores.find(s => s.id === id)?.name || '—';
 
   if (loading) return <div className="p-6 text-zinc-500">Carregando...</div>;
-  
-  // Bloqueio seguro para cargos não autorizados
-  if (!isAdminOrMaster) {
-    return <div className="p-6 text-red-600 font-medium">Sem permissao para acessar esta tela.</div>;
-  }
-
+  if (!canManage) return <div className="p-6 text-red-600 font-medium">Sem permissao para acessar esta tela.</div>;
   if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum deposito PAI cadastrado ainda.</div>;
 
   return (
