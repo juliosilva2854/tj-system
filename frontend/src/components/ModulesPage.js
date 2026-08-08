@@ -3,6 +3,7 @@ import { modulesAPI, warehousesAPI, storesAPI } from '../api';
 import { Button } from './ui/button';
 import { Settings, Save, Warehouse, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import { getUser, canManageModules } from '../auth';
 
 const MODULE_LABELS = {
   dashboard: 'Dashboard', stores: 'Lojas', warehouses: 'Depositos',
@@ -10,16 +11,6 @@ const MODULE_LABELS = {
   transfers: 'Transferencias', invoices: 'Notas Fiscais', suppliers: 'Fornecedores',
   sales: 'Vendas', reports: 'Relatorios', alerts: 'Alertas',
   audit: 'Auditoria', users: 'Usuarios', guide: 'Guia',
-};
-
-// Função robusta que trata qualquer formato de armazenamento do utilizador no navegador
-const getUser = () => { 
-  try { 
-    const raw = JSON.parse(localStorage.getItem('user') || '{}');
-    return raw.user || raw; 
-  } catch { 
-    return {}; 
-  } 
 };
 
 export const ModulesPage = () => {
@@ -32,12 +23,10 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Validação segura e flexível de privilégios
-  const role = String(me.role || '').toLowerCase();
-  const canManage = role === 'master' || role === 'admin' || role === 'administrador' || me.is_master_access === true;
+  const allowed = canManageModules(me);
 
   useEffect(() => {
-    if (!canManage) {
+    if (!allowed) {
       setLoading(false);
       return;
     }
@@ -52,10 +41,13 @@ export const ModulesPage = () => {
           setSelected(pais[0].id);
           setEnabled(pais[0].enabled_modules || []);
         }
-      } catch { toast.error('Erro ao carregar dados'); }
-      finally { setLoading(false); }
+      } catch { 
+        toast.error('Erro ao carregar dados'); 
+      } finally { 
+        setLoading(false); 
+      }
     })();
-  }, [canManage]);
+  }, [allowed]);
 
   const onSelect = (wid) => {
     setSelected(wid);
@@ -71,28 +63,33 @@ export const ModulesPage = () => {
     setSaving(true);
     try {
       await modulesAPI.updateWarehouse(selected, enabled);
-      toast.success('Modulos atualizados');
+      toast.success('Módulos atualizados com sucesso');
       setWarehouses(prev => prev.map(w => w.id === selected ? { ...w, enabled_modules: enabled } : w));
-    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
-    finally { setSaving(false); }
+    } catch (e) { 
+      toast.error(e.response?.data?.detail || 'Erro ao salvar módulos'); 
+    } finally { 
+      setSaving(false); 
+    }
   };
 
   const sName = (id) => stores.find(s => s.id === id)?.name || '—';
 
   if (loading) return <div className="p-6 text-zinc-500">Carregando...</div>;
-  if (!canManage) return <div className="p-6 text-red-600 font-medium">Sem permissao para acessar esta tela.</div>;
-  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum deposito PAI cadastrado ainda.</div>;
+  if (!allowed) return <div className="p-6 text-red-600 font-medium">Sem permissão para acessar esta tela.</div>;
+  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum depósito PAI cadastrado ainda.</div>;
 
   return (
     <div className="p-6 space-y-4" data-testid="modules-page">
       <div>
-        <h1 className="text-2xl font-semibold text-zinc-900 flex items-center gap-2"><Settings className="h-6 w-6 text-indigo-600" />Configuracao de Modulos</h1>
-        <p className="text-sm text-zinc-500">Habilite/desabilite menus por Deposito PAI. Cada FILHO herda do seu PAI.</p>
+        <h1 className="text-2xl font-semibold text-zinc-900 flex items-center gap-2">
+          <Settings className="h-6 w-6 text-indigo-600" /> Configuração de Módulos
+        </h1>
+        <p className="text-sm text-zinc-500">Habilite/desabilite menus por Depósito PAI. Cada FILHO herda do seu PAI.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1 bg-white rounded-lg border border-zinc-200 p-3">
-          <p className="text-xs font-semibold uppercase text-zinc-500 mb-2">Depositos PAI</p>
+          <p className="text-xs font-semibold uppercase text-zinc-500 mb-2">Depósitos PAI</p>
           <div className="space-y-1">
             {warehouses.map(w => (
               <button key={w.id} onClick={() => onSelect(w.id)}
@@ -111,7 +108,7 @@ export const ModulesPage = () => {
         <div className="lg:col-span-2 bg-white rounded-lg border border-zinc-200 p-4">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <p className="text-xs font-semibold uppercase text-zinc-500">Modulos habilitados</p>
+              <p className="text-xs font-semibold uppercase text-zinc-500">Módulos habilitados</p>
               <p className="text-sm font-medium text-zinc-900">{warehouses.find(w => w.id === selected)?.name}</p>
             </div>
             <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
@@ -130,7 +127,7 @@ export const ModulesPage = () => {
               </label>
             ))}
           </div>
-          <p className="text-xs text-zinc-500 mt-3">Lista vazia = todos os modulos habilitados (default).</p>
+          <p className="text-xs text-zinc-500 mt-3">Lista vazia = todos os módulos habilitados (default).</p>
         </div>
       </div>
     </div>
