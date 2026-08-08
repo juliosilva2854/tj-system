@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { modulesAPI, warehousesAPI, storesAPI } from '../api';
 import { Button } from './ui/button';
-import { Toggle3D as Switch } from './ui/switch-shim';
 import { Settings, Save, Warehouse, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -25,10 +24,10 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // A CORREÇÃO ENTRA AQUI: Agora ele lê as permissões do backend e a flag de Master
-  const isMaster = me.role === 'master' || me.is_master_access;
-  const canView = isMaster || (me.permissions && me.permissions.view_modules) || ['master', 'admin'].includes(me.role);
-  const canManage = isMaster || (me.permissions && me.permissions.manage_modules) || ['master', 'admin'].includes(me.role);
+  // Flexibilizando a checagem no Frontend - Agora aceita "Administrador", "Admin", "Master", etc.
+  const roleStr = String(me.role || '').toLowerCase();
+  const isMasterOrAdmin = roleStr.includes('master') || roleStr.includes('admin') || me.is_master_access === true;
+  const canManage = isMasterOrAdmin || (me.permissions && me.permissions.manage_modules);
 
   useEffect(() => {
     (async () => {
@@ -42,8 +41,11 @@ export const ModulesPage = () => {
           setSelected(pais[0].id);
           setEnabled(pais[0].enabled_modules || []);
         }
-      } catch { toast.error('Erro ao carregar dados'); }
-      finally { setLoading(false); }
+      } catch { 
+        toast.error('Não foi possível carregar os dados. Verifique as suas permissões.'); 
+      } finally { 
+        setLoading(false); 
+      }
     })();
   }, []);
 
@@ -62,7 +64,6 @@ export const ModulesPage = () => {
     try {
       await modulesAPI.updateWarehouse(selected, enabled);
       toast.success('Modulos atualizados');
-      // Atualiza state local
       setWarehouses(prev => prev.map(w => w.id === selected ? { ...w, enabled_modules: enabled } : w));
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
     finally { setSaving(false); }
@@ -71,8 +72,9 @@ export const ModulesPage = () => {
   const sName = (id) => stores.find(s => s.id === id)?.name || '—';
 
   if (loading) return <div className="p-6 text-zinc-500">Carregando...</div>;
-  if (!canView) return <div className="p-6 text-zinc-500">Sem permissao para acessar esta tela.</div>;
-  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum deposito PAI cadastrado ainda.</div>;
+  
+  // O bloqueio "Sem permissão" rígido foi removido. O Backend agora controla a segurança real.
+  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum depósito PAI acessível ou sem permissão de leitura.</div>;
 
   return (
     <div className="p-6 space-y-4" data-testid="modules-page">
@@ -105,7 +107,6 @@ export const ModulesPage = () => {
               <p className="text-xs font-semibold uppercase text-zinc-500">Modulos habilitados</p>
               <p className="text-sm font-medium text-zinc-900">{warehouses.find(w => w.id === selected)?.name}</p>
             </div>
-            {/* Esconde o botao de salvar se o usuario tiver apenas permissao de visualizacao */}
             {canManage && (
               <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
                 <Save className="h-4 w-4 mr-1" />{saving ? 'Salvando...' : 'Salvar'}
