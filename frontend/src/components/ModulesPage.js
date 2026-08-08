@@ -12,7 +12,15 @@ const MODULE_LABELS = {
   audit: 'Auditoria', users: 'Usuarios', guide: 'Guia',
 };
 
-const getUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
+// Função robusta que trata qualquer formato de armazenamento do utilizador no navegador
+const getUser = () => { 
+  try { 
+    const raw = JSON.parse(localStorage.getItem('user') || '{}');
+    return raw.user || raw; 
+  } catch { 
+    return {}; 
+  } 
+};
 
 export const ModulesPage = () => {
   const me = getUser();
@@ -24,7 +32,7 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Verificação segura e flexível (aceita master, admin, administrador, independentemente de maiúsculas/minúsculas)
+  // Validação segura e flexível de privilégios
   const role = String(me.role || '').toLowerCase();
   const canManage = role === 'master' || role === 'admin' || role === 'administrador' || me.is_master_access === true;
 
@@ -125,7 +133,6 @@ export const ModulesPage = () => {
           <p className="text-xs text-zinc-500 mt-3">Lista vazia = todos os modulos habilitados (default).</p>
         </div>
       </div>
-      
     </div>
   );
 };
