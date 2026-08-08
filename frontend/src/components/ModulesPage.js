@@ -125,6 +125,7 @@ export const ModulesPage = () => {
           <p className="text-xs text-zinc-500 mt-3">Lista vazia = todos os modulos habilitados (default).</p>
         </div>
       </div>
+      
     </div>
   );
 };
