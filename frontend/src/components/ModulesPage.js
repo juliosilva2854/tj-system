@@ -24,12 +24,15 @@ export const ModulesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Flexibilizando a checagem no Frontend - Agora aceita "Administrador", "Admin", "Master", etc.
-  const roleStr = String(me.role || '').toLowerCase();
-  const isMasterOrAdmin = roleStr.includes('master') || roleStr.includes('admin') || me.is_master_access === true;
-  const canManage = isMasterOrAdmin || (me.permissions && me.permissions.manage_modules);
+  // Verificação segura de privilégios administrativos
+  const role = String(me.role || '').toLowerCase();
+  const isAdminOrMaster = role === 'master' || role === 'admin' || role === 'administrador' || me.is_master_access === true;
 
   useEffect(() => {
+    if (!isAdminOrMaster) {
+      setLoading(false);
+      return;
+    }
     (async () => {
       try {
         const [m, w, s] = await Promise.all([modulesAPI.list(), warehousesAPI.getAll(), storesAPI.getAll()]);
@@ -41,13 +44,10 @@ export const ModulesPage = () => {
           setSelected(pais[0].id);
           setEnabled(pais[0].enabled_modules || []);
         }
-      } catch { 
-        toast.error('Não foi possível carregar os dados. Verifique as suas permissões.'); 
-      } finally { 
-        setLoading(false); 
-      }
+      } catch { toast.error('Erro ao carregar dados'); }
+      finally { setLoading(false); }
     })();
-  }, []);
+  }, [isAdminOrMaster]);
 
   const onSelect = (wid) => {
     setSelected(wid);
@@ -73,8 +73,12 @@ export const ModulesPage = () => {
 
   if (loading) return <div className="p-6 text-zinc-500">Carregando...</div>;
   
-  // O bloqueio "Sem permissão" rígido foi removido. O Backend agora controla a segurança real.
-  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum depósito PAI acessível ou sem permissão de leitura.</div>;
+  // Bloqueio seguro para cargos não autorizados
+  if (!isAdminOrMaster) {
+    return <div className="p-6 text-red-600 font-medium">Sem permissao para acessar esta tela.</div>;
+  }
+
+  if (warehouses.length === 0) return <div className="p-6 text-zinc-500">Nenhum deposito PAI cadastrado ainda.</div>;
 
   return (
     <div className="p-6 space-y-4" data-testid="modules-page">
@@ -107,11 +111,9 @@ export const ModulesPage = () => {
               <p className="text-xs font-semibold uppercase text-zinc-500">Modulos habilitados</p>
               <p className="text-sm font-medium text-zinc-900">{warehouses.find(w => w.id === selected)?.name}</p>
             </div>
-            {canManage && (
-              <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
-                <Save className="h-4 w-4 mr-1" />{saving ? 'Salvando...' : 'Salvar'}
-              </Button>
-            )}
+            <Button onClick={save} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700" data-testid="save-modules-btn">
+              <Save className="h-4 w-4 mr-1" />{saving ? 'Salvando...' : 'Salvar'}
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -121,13 +123,7 @@ export const ModulesPage = () => {
                   <ShieldCheck className={`h-4 w-4 ${enabled.includes(m) ? 'text-indigo-600' : 'text-zinc-300'}`} />
                   <span className="text-sm text-zinc-700">{MODULE_LABELS[m] || m}</span>
                 </div>
-                <input 
-                  type="checkbox" 
-                  checked={enabled.includes(m)} 
-                  onChange={() => toggle(m)} 
-                  disabled={!canManage}
-                  className="h-4 w-4 accent-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed" 
-                />
+                <input type="checkbox" checked={enabled.includes(m)} onChange={() => toggle(m)} className="h-4 w-4 accent-indigo-600" />
               </label>
             ))}
           </div>
