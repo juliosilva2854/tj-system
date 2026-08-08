@@ -34,7 +34,10 @@ def _gemini_extract(content: bytes, mime: str) -> dict:
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY nao configurada")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # CORREÇÃO AQUI: Mudando para o modelo 1.5-flash que tem cota gratuita liberada e estável
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
     response = model.generate_content([_OCR_PROMPT, {"mime_type": mime, "data": content}])
     return _clean_json(response.text)
 
