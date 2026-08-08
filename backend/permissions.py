@@ -36,6 +36,10 @@ CAN_VIEW_AUDIT = ADMIN_ROLES | MANAGER_ROLES
 CAN_VIEW_REPORTS = ADMIN_ROLES | GENERAL_MANAGER_ROLES
 # Quem pode gerenciar usuarios
 CAN_MANAGE_USERS = ADMIN_ROLES
+# Quem pode ver a configuracao de modulos
+CAN_VIEW_MODULES = ADMIN_ROLES | MANAGER_ROLES
+# Quem pode editar/salvar os modulos
+CAN_MANAGE_MODULES = ADMIN_ROLES
 
 # === SCOPE ===
 

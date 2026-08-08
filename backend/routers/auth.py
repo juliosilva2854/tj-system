@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from datetime import datetime, timezone, timedelta
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
+from permissions import CAN_VIEW_MODULES, CAN_MANAGE_MODULES, get_user_enabled_modules
 from database import db, audit
 from auth import hash_password, verify_password, create_refresh_token, decode_token, token_from_user_doc
 from deps import get_current_user, require_roles
@@ -119,6 +119,18 @@ async def auth_me(user: dict = Depends(get_current_user)):
     doc['tenant_name'] = tenant_name
     doc['warehouse_name'] = warehouse_name
     doc['store_names'] = store_names
+    
+    # --- A NOSSA ALTERAÇÃO ENTRA AQUI ---
+    # Mapeia permissoes dinamicas para o frontend, garantindo que o master/admin vejam os modulos
+    role = doc.get('role', '')
+    is_master = role == 'master' or doc.get('is_master_access', False)
+    
+    doc_permissions = doc.get('permissions') or {}
+    doc_permissions['view_modules'] = is_master or role in CAN_VIEW_MODULES
+    doc_permissions['manage_modules'] = is_master or role in CAN_MANAGE_MODULES
+    doc['permissions'] = doc_permissions
+    # ------------------------------------
+
     # Modulos efetivos
     from permissions import get_user_enabled_modules
     doc['enabled_modules'] = await get_user_enabled_modules(user)
