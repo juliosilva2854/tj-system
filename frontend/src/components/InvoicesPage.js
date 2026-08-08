@@ -119,9 +119,9 @@ export const InvoicesPage = () => {
                       <div><p className="text-xs text-zinc-500">Valor Total</p><p className="text-sm font-medium font-mono">R$ {formData.total_value.toFixed(2)}</p></div>
                     </div>
                     {formData.items.length > 0 && (
-                      <div className="overflow-x-auto">
+                      <div className="max-h-[45vh] overflow-y-auto overflow-x-auto border border-zinc-200 rounded-md">
                         <table className="w-full text-sm">
-                          <thead className="bg-zinc-50"><tr><th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Produto</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Qtd</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Valor Unit.</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th></tr></thead>
+                          <thead className="bg-zinc-50 sticky top-0 z-10 shadow-sm"><tr><th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Produto</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Qtd</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Valor Unit.</th><th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th></tr></thead>
                           <tbody className="divide-y divide-zinc-100">
                             {formData.items.map((it, i) => <tr key={i}><td className="px-3 py-2">{it.product_name}</td><td className="px-3 py-2 text-right font-mono">{it.quantity}</td><td className="px-3 py-2 text-right font-mono">R$ {it.unit_price.toFixed(2)}</td><td className="px-3 py-2 text-right font-mono">R$ {it.total.toFixed(2)}</td></tr>)}
                           </tbody>
@@ -138,7 +138,7 @@ export const InvoicesPage = () => {
       </div>
 
       <Dialog open={viewOpen} onOpenChange={setViewOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Nota Fiscal - {selectedInvoice?.invoice_number}</DialogTitle></DialogHeader>
           {selectedInvoice && (
             <div className="space-y-4">
@@ -149,10 +149,12 @@ export const InvoicesPage = () => {
                 <div><p className="text-xs text-zinc-500">Impostos</p><p className="text-sm font-mono">R$ {(selectedInvoice.tax_value || 0).toFixed(2)}</p></div>
               </div>
               {(selectedInvoice.items || []).length > 0 && (
-                <table className="w-full text-sm">
-                  <thead className="bg-zinc-50"><tr><th className="px-3 py-2 text-left text-xs text-zinc-500">Produto</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Qtd</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Unit.</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Total</th></tr></thead>
-                  <tbody className="divide-y divide-zinc-100">{selectedInvoice.items.map((it, i) => <tr key={i}><td className="px-3 py-2">{it.product_name}</td><td className="px-3 py-2 text-right font-mono">{it.quantity}</td><td className="px-3 py-2 text-right font-mono">R$ {it.unit_price.toFixed(2)}</td><td className="px-3 py-2 text-right font-mono">R$ {it.total.toFixed(2)}</td></tr>)}</tbody>
-                </table>
+                <div className="max-h-[50vh] overflow-y-auto overflow-x-auto border border-zinc-200 rounded-md">
+                  <table className="w-full text-sm">
+                    <thead className="bg-zinc-50 sticky top-0 z-10 shadow-sm"><tr><th className="px-3 py-2 text-left text-xs text-zinc-500">Produto</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Qtd</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Unit.</th><th className="px-3 py-2 text-right text-xs text-zinc-500">Total</th></tr></thead>
+                    <tbody className="divide-y divide-zinc-100">{selectedInvoice.items.map((it, i) => <tr key={i}><td className="px-3 py-2">{it.product_name}</td><td className="px-3 py-2 text-right font-mono">{it.quantity}</td><td className="px-3 py-2 text-right font-mono">R$ {it.unit_price.toFixed(2)}</td><td className="px-3 py-2 text-right font-mono">R$ {it.total.toFixed(2)}</td></tr>)}</tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}
