@@ -92,3 +92,8 @@ export const canApproveRequisition = (user = getUser()) => {
 export const canManageTransfers = (user = getUser()) => {
   return isAdmin(user) || hasRole(['gerente_geral'], user);
 };
+
+// Quem pode gerir Lojas/Unidades (criar/editar/excluir): master (role ou is_master_access) ou admin
+export const canManageStores = (user = getUser()) => {
+  return isMaster(user) || isAdmin(user);
+};

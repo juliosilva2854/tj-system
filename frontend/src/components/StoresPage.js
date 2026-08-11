@@ -1,22 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { storesAPI } from '../api';
+import { storesAPI, tenantsAPI } from '../api';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Building2, Plus, Pencil, Trash2, MapPin } from 'lucide-react';
 import { toast } from 'sonner';
-
-const getUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
+import { getUser, canManageStores, isMaster } from '../auth';
 
 export const StoresPage = () => {
-  const me = getUser();
+  const me = getUser() || {};
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: '', code: '', address: '' });
+  const [tenants, setTenants] = useState([]);
+  const [selectedTenant, setSelectedTenant] = useState('');
 
-  const canManage = ['master', 'admin'].includes(me.role);
+  const canManage = canManageStores();
+  // Master global (sem tenant proprio) precisa escolher o estabelecimento ao criar
+  const needsTenantPick = isMaster(me) && !me.tenant_id;
 
   const load = async () => {
     try {
@@ -27,14 +31,26 @@ export const StoresPage = () => {
   };
   useEffect(() => { load(); }, []);
 
-  const openNew = () => { setEditing(null); setForm({ name: '', code: '', address: '' }); setOpen(true); };
+  // Carrega tenants apenas quando o master global precisa selecionar
+  useEffect(() => {
+    if (canManage && needsTenantPick) {
+      tenantsAPI.getAll().then(r => setTenants(r.data)).catch(() => {});
+    }
+  }, [canManage, needsTenantPick]);
+
+  const openNew = () => { setEditing(null); setForm({ name: '', code: '', address: '' }); setSelectedTenant(''); setOpen(true); };
   const openEdit = (s) => { setEditing(s); setForm({ name: s.name, code: s.code || '', address: s.address || '' }); setOpen(true); };
 
   const save = async () => {
+    if (!form.name || form.name.trim().length < 2) { toast.error('Informe o nome da loja'); return; }
     try {
       if (editing) {
         await storesAPI.update(editing.id, form);
         toast.success('Loja atualizada');
+      } else if (needsTenantPick) {
+        if (!selectedTenant) { toast.error('Selecione o estabelecimento'); return; }
+        await tenantsAPI.createStore(selectedTenant, form);
+        toast.success('Loja criada');
       } else {
         await storesAPI.create(form);
         toast.success('Loja criada');
@@ -69,6 +85,15 @@ export const StoresPage = () => {
             <DialogContent>
               <DialogHeader><DialogTitle>{editing ? 'Editar loja' : 'Nova loja'}</DialogTitle></DialogHeader>
               <div className="space-y-3">
+                {!editing && needsTenantPick && (
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">Estabelecimento</label>
+                    <Select value={selectedTenant} onValueChange={setSelectedTenant}>
+                      <SelectTrigger data-testid="store-tenant-select"><SelectValue placeholder="Selecione o estabelecimento" /></SelectTrigger>
+                      <SelectContent>{tenants.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <Input placeholder="Nome (ex: Restaurante A)" value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="store-name" />
                 <Input placeholder="Codigo (ex: REST-A)" value={form.code} onChange={e => setForm({...form, code: e.target.value})} data-testid="store-code" />
                 <Input placeholder="Endereco" value={form.address} onChange={e => setForm({...form, address: e.target.value})} data-testid="store-address" />

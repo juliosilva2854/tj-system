@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
 from datetime import datetime, timezone
 from database import db, audit
 from deps import get_current_user, require_roles
@@ -7,14 +8,35 @@ from permissions import verify_tenant_access, get_user_store_scope, ADMIN_ROLES,
 
 router = APIRouter(tags=["stores"])
 
+
+def _can_manage_stores(user: dict) -> bool:
+    """Master (role ou is_master_access) ou admin podem gerir lojas."""
+    role = str(user.get('role', '')).lower().strip()
+    return role in ('master', 'admin') or bool(user.get('is_master_access', False))
+
+
+def _is_master(user: dict) -> bool:
+    return str(user.get('role', '')).lower().strip() == 'master' or bool(user.get('is_master_access', False))
+
+
 @router.post("/stores")
-async def create_store(data: StoreCreate, user: dict = Depends(require_roles("master", "admin"))):
+async def create_store(data: StoreCreate, tenant_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if not _can_manage_stores(user):
+        raise HTTPException(status_code=403, detail="Permissao insuficiente")
+    is_master = _is_master(user)
     tid = user.get('tenant_id') or ''
-    if user['role'] == 'master':
-        body_tid = None  # master precisa passar tenant_id no body futuramente; por ora exigir vinculo
-        raise HTTPException(status_code=400, detail="Master deve criar loja autenticado como admin do tenant ou usar /tenants/{id}/stores")
+    # Master global (sem tenant proprio) precisa indicar o tenant alvo da loja
+    if not tid and is_master:
+        tid = tenant_id or ''
     if not tid:
+        if is_master:
+            raise HTTPException(status_code=400, detail="Informe o tenant_id para criar a loja como master")
         raise HTTPException(status_code=400, detail="Sem estabelecimento vinculado")
+    # Se o tenant foi informado explicitamente (master), valida que existe
+    if tenant_id and is_master:
+        t = await db.tenants.find_one({"id": tid}, {"_id": 0})
+        if not t:
+            raise HTTPException(status_code=404, detail="Tenant nao encontrado")
     now = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": gen_id(), "tenant_id": tid, "name": data.name,
@@ -67,23 +89,29 @@ async def list_stores(user: dict = Depends(get_current_user)):
     return docs
 
 @router.patch("/stores/{sid}")
-async def update_store(sid: str, request: Request, user: dict = Depends(require_roles("master", "admin"))):
+async def update_store(sid: str, request: Request, user: dict = Depends(get_current_user)):
+    if not _can_manage_stores(user):
+        raise HTTPException(status_code=403, detail="Permissao insuficiente")
     body = await request.json()
     target = await db.stores.find_one({"id": sid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Nao encontrada")
-    await verify_tenant_access(user, target['tenant_id'])
+    if not _is_master(user):
+        await verify_tenant_access(user, target['tenant_id'])
     body.pop('id', None); body.pop('tenant_id', None); body.pop('created_at', None)
     await db.stores.update_one({"id": sid}, {"$set": body})
     await audit.log(user['sub'], user['email'], "EDITAR", "store", sid, target['tenant_id'])
     return {"message": "Atualizada"}
 
 @router.delete("/stores/{sid}")
-async def delete_store(sid: str, user: dict = Depends(require_roles("master", "admin"))):
+async def delete_store(sid: str, user: dict = Depends(get_current_user)):
+    if not _can_manage_stores(user):
+        raise HTTPException(status_code=403, detail="Permissao insuficiente")
     target = await db.stores.find_one({"id": sid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Nao encontrada")
-    await verify_tenant_access(user, target['tenant_id'])
+    if not _is_master(user):
+        await verify_tenant_access(user, target['tenant_id'])
     # bloquear se houver warehouses ativos
     count = await db.warehouses.count_documents({"store_id": sid, "active": True})
     if count > 0:

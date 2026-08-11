@@ -116,6 +116,20 @@ user_problem_statement: |
   9. Manual de producao + testes
 
 backend:
+  - task: "Fix permissao Master gerir Lojas (stores POST/PUT/DELETE)"
+    implemented: true
+    working: true
+    file: "backend/routers/stores.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "BUG: POST /stores tinha bloqueio explicito (400) para master; require_roles ignorava is_master_access. Correcao: POST/PATCH/DELETE agora usam get_current_user + _can_manage_stores (master|is_master_access|admin). Master global pode informar tenant_id (query) no POST; admin usa proprio tenant. PATCH/DELETE pulam verify_tenant_access para master. Rota POST /tenants/{tid}/stores continua master-only."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL 6 TEST SCENARIOS PASSED. Comprehensive testing via public URL (https://a4f9812a-7632-49c5-a118-8c7d537f85e9.preview.emergentagent.com/api). TEST 1 - MASTER CREATE WITH tenant_id (MAIN BUG FIX): Master successfully created store with POST /stores?tenant_id={TID} returning HTTP 200 (previously returned 400 'Master deve criar...'). Store created with correct tenant_id. ✓ BUG FIX VERIFIED. TEST 2 - MASTER CREATE WITHOUT tenant_id: Master POST /stores (no tenant_id query) correctly returned HTTP 400 with message 'Informe o tenant_id para criar a loja como master' (expected validation behavior). TEST 3 - MASTER EDIT: Master PATCH /stores/{sid} returned HTTP 200. Store name successfully changed and verified via GET /stores. TEST 4 - MASTER DELETE: Master created new store, verified no active warehouses, DELETE /stores/{sid} returned HTTP 200. Store successfully deleted. TEST 5 - ADMIN REGRESSION: Admin (admin.tj) POST /stores (no tenant_id query) returned HTTP 200, store created in admin's own tenant. Admin PATCH /stores/{id} returned HTTP 200. Admin DELETE /stores/{id} returned HTTP 200. All admin operations working correctly. TEST 6 - RBAC NEGATIVE: Operacional (operacional.tj) correctly blocked with HTTP 403 for POST /stores, PATCH /stores/{id}, and DELETE /stores/{id}. RBAC enforcement working correctly. SUMMARY: Master permission bug completely fixed. Master can now create/edit/delete stores. Admin regression passed. RBAC working correctly."
   - task: "Fix integridade referencial estoque (Desconhecido) + CRUD produtos"
     implemented: true
     working: true
@@ -326,12 +340,84 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Fix permissao Master gerir Lojas (stores POST/PUT/DELETE)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        FASE 2 - Bug isolado de permissao em LOJAS (stores). Testar BACKEND.
+        Login MASTER via API: email `master@sconnecta.com.br` / senha `Master@2026` (login por API funciona; bloqueio de master e apenas no frontend). Credenciais em /app/memory/test_credentials.md.
+        1) MASTER CREATE: GET /api/tenants para pegar um tenant_id valido. POST /api/stores?tenant_id={TID} body {"name":"Loja QA Master","code":"QA-M"} -> DEVE 200 (antes 400).
+        2) MASTER sem tenant_id: POST /api/stores (sem query) -> 400 pedindo tenant_id (esperado).
+        3) MASTER EDIT: PATCH /api/stores/{sid} {"name":"Loja QA Editada"} -> 200.
+        4) MASTER DELETE: loja sem depositos, DELETE /api/stores/{sid} -> 200.
+        5) ADMIN regressao: admin.tj / Admin@2026. POST /api/stores {"name":"Loja Admin"} -> 200; PATCH/DELETE -> 200.
+        6) RBAC negativo: operacional.tj / Operacional@2026. POST/PATCH/DELETE /api/stores -> 403.
+        Reporte os codigos HTTP exatos.
+    - agent: "testing"
+      message: |
+        ✅✅✅ MASTER STORE PERMISSION BUG FIX - ALL TESTS PASSED ✅✅✅
+        
+        Executed comprehensive backend testing via public URL (https://a4f9812a-7632-49c5-a118-8c7d537f85e9.preview.emergentagent.com/api) with credentials from /app/memory/test_credentials.md.
+        
+        ✅ TEST 1 - MASTER CREATE WITH tenant_id (MAIN BUG FIX):
+           - Master login: master@sconnecta.com.br / Master@2026 (successful)
+           - GET /api/tenants: Retrieved tenant "Unidade TJ" (id: 878297f1-2bb9-4a97-8d93-f4c61d853e33)
+           - POST /api/stores?tenant_id={TID} with body {"name":"Loja QA Master","code":"QA-M","address":"Rua X"}
+           - ✓ HTTP 200 (previously returned 400 "Master deve criar...")
+           - ✓ Store created with correct tenant_id matching the query param
+           - ✓ BUG FIX VERIFIED: Master can now create stores
+        
+        ✅ TEST 2 - MASTER CREATE WITHOUT tenant_id:
+           - POST /api/stores (no tenant_id query) with body {"name":"Loja Sem Tenant"}
+           - ✓ HTTP 400 with message "Informe o tenant_id para criar a loja como master"
+           - ✓ Expected validation behavior working correctly
+        
+        ✅ TEST 3 - MASTER EDIT:
+           - PATCH /api/stores/{sid} with body {"name":"Loja QA Editada"}
+           - ✓ HTTP 200 with message "Atualizada"
+           - ✓ GET /api/stores confirmed name change to "Loja QA Editada"
+           - ✓ Master can edit stores
+        
+        ✅ TEST 4 - MASTER DELETE:
+           - Created new store "Loja Para Excluir" for deletion test
+           - Verified no active warehouses attached to store
+           - DELETE /api/stores/{sid}
+           - ✓ HTTP 200 with message "Excluida"
+           - ✓ Master can delete stores
+        
+        ✅ TEST 5 - ADMIN REGRESSION:
+           - Admin login: admin.tj / Admin@2026 (successful)
+           - 5a. POST /api/stores (no tenant_id query) with body {"name":"Loja Admin","code":"ADMIN-1"}
+             ✓ HTTP 200, store created in admin's own tenant (878297f1-2bb9-4a97-8d93-f4c61d853e33)
+           - 5b. PATCH /api/stores/{id} with body {"name":"Loja Admin Editada"}
+             ✓ HTTP 200 with message "Atualizada"
+           - 5c. DELETE /api/stores/{id}
+             ✓ HTTP 200 with message "Excluida"
+           - ✓ All admin operations working correctly (no regression)
+        
+        ✅ TEST 6 - RBAC NEGATIVE (Operacional):
+           - Operacional login: operacional.tj / Operacional@2026 (successful)
+           - 6a. POST /api/stores with body {"name":"Loja Teste","code":"TEST"}
+             ✓ HTTP 403 with message "Permissao insuficiente"
+           - 6b. PATCH /api/stores/{any} with body {"name":"Y"}
+             ✓ HTTP 403 with message "Permissao insuficiente"
+           - 6c. DELETE /api/stores/{any}
+             ✓ HTTP 403 with message "Permissao insuficiente"
+           - ✓ RBAC enforcement working correctly
+        
+        SUMMARY: 6/6 test scenarios passed with exact expected HTTP status codes.
+        - Master permission bug COMPLETELY FIXED
+        - Master can create stores (with tenant_id), edit stores, delete stores
+        - Admin operations continue to work correctly (regression test passed)
+        - RBAC correctly blocks operacional users (403 for all operations)
+        - No errors or unexpected behavior observed
+        
+        Backend production-ready. Bug fix validated and working correctly.
     - agent: "main"
       message: |
         FASE 1 - Correcoes de UI/integracao. RECRIEI backend/.env e frontend/.env (estavam AUSENTES -> backend crashava com KeyError MONGO_URL). Rodei /api/seed (banco estava vazio) e recriei /app/memory/test_credentials.md.
