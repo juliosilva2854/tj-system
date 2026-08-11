@@ -19,8 +19,9 @@ export const StoresPage = () => {
   const [selectedTenant, setSelectedTenant] = useState('');
 
   const canManage = canManageStores();
-  // Master global (sem tenant proprio) precisa escolher o estabelecimento ao criar
-  const needsTenantPick = isMaster(me) && !me.tenant_id;
+  const isMasterUser = isMaster(me);
+  // Master seleciona o estabelecimento (tenant) ao criar a loja
+  const needsTenantPick = isMasterUser;
 
   const load = async () => {
     try {
@@ -31,12 +32,14 @@ export const StoresPage = () => {
   };
   useEffect(() => { load(); }, []);
 
-  // Carrega tenants apenas quando o master global precisa selecionar
+  // Carrega TODOS os tenants para o Master (necessario para o dropdown e para criar lojas de qualquer estabelecimento)
   useEffect(() => {
-    if (canManage && needsTenantPick) {
-      tenantsAPI.getAll().then(r => setTenants(r.data)).catch(() => {});
+    if (canManage && isMasterUser) {
+      tenantsAPI.getAll()
+        .then(r => setTenants(r.data))
+        .catch(() => toast.error('Erro ao carregar estabelecimentos'));
     }
-  }, [canManage, needsTenantPick]);
+  }, [canManage, isMasterUser]);
 
   const openNew = () => { setEditing(null); setForm({ name: '', code: '', address: '' }); setSelectedTenant(''); setOpen(true); };
   const openEdit = (s) => { setEditing(s); setForm({ name: s.name, code: s.code || '', address: s.address || '' }); setOpen(true); };
@@ -80,7 +83,7 @@ export const StoresPage = () => {
         {canManage && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-              <Button onClick={openNew} className="bg-blue-600 hover:bg-blue-700" data-testid="new-store-btn"><Plus className="h-4 w-4 mr-1" />Nova loja</Button>
+              <Button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white" data-testid="new-store-btn"><Plus className="h-4 w-4 mr-1" />Nova loja</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>{editing ? 'Editar loja' : 'Nova loja'}</DialogTitle></DialogHeader>
