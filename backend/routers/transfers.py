@@ -77,11 +77,13 @@ async def create_transfer(data: TransferCreate, user: dict = Depends(require_rol
         }, {"_id": 0})
         if dst_inv:
             await db.inventory.update_one({"id": dst_inv['id']},
-                {"$set": {"quantity": dst_inv['quantity'] + item.quantity, "updated_at": now}})
+                {"$set": {"quantity": dst_inv['quantity'] + item.quantity, "updated_at": now,
+                          "product_name": item.product_name, "product_sku": getattr(item, 'product_sku', '') or ''}})
         else:
             await db.inventory.insert_one({
                 "id": gen_id(), "tenant_id": target_tid, "product_id": item.product_id,
-                "warehouse_id": data.to_warehouse_id, "quantity": item.quantity, "updated_at": now
+                "warehouse_id": data.to_warehouse_id, "quantity": item.quantity, "updated_at": now,
+                "product_name": item.product_name, "product_sku": getattr(item, 'product_sku', '') or '',
             })
     await audit.log(user['sub'], user['email'], "TRANSFERIR_ENTRE_LOJAS", "transferencia",
                     doc['id'], target_tid,

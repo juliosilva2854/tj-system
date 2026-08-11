@@ -85,11 +85,13 @@ async def approve_requisition(rid: str, user: dict = Depends(require_roles(*CAN_
         await db.inventory.update_one({"id": pai_inv['id']}, {"$set": {"quantity": new_pai_qty, "updated_at": now}})
         filho_inv = await db.inventory.find_one({"product_id": pid, "warehouse_id": filho_id, "tenant_id": req['tenant_id']}, {"_id": 0})
         if filho_inv:
-            await db.inventory.update_one({"id": filho_inv['id']}, {"$set": {"quantity": filho_inv['quantity'] + qty, "updated_at": now}})
+            await db.inventory.update_one({"id": filho_inv['id']}, {"$set": {"quantity": filho_inv['quantity'] + qty, "updated_at": now,
+                "product_name": item.get('product_name', ''), "product_sku": item.get('product_sku', '')}})
         else:
             await db.inventory.insert_one({
                 "id": gen_id(), "tenant_id": req['tenant_id'], "product_id": pid,
-                "warehouse_id": filho_id, "quantity": qty, "updated_at": now
+                "warehouse_id": filho_id, "quantity": qty, "updated_at": now,
+                "product_name": item.get('product_name', ''), "product_sku": item.get('product_sku', ''),
             })
     await db.requisitions.update_one({"id": rid}, {"$set": {"status": "approved", "resolved_at": now, "resolved_by": user['sub']}})
     await audit.log(user['sub'], user['email'], "APROVAR", "requisicao", rid, req['tenant_id'],

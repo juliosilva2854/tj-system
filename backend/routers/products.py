@@ -64,18 +64,25 @@ async def transfer_product(pid: str, warehouse_id: str, quantity: float, sector:
     inv = await db.inventory.find_one({"product_id": pid, "warehouse_id": warehouse_id, "tenant_id": product['tenant_id']}, {"_id": 0})
     now = datetime.now(timezone.utc).isoformat()
     if inv:
-        await db.inventory.update_one({"id": inv['id']}, {"$set": {"quantity": inv['quantity'] + quantity, "updated_at": now}})
+        await db.inventory.update_one({"id": inv['id']}, {"$set": {
+            "quantity": inv['quantity'] + quantity, "updated_at": now,
+            # mantem nome/sku denormalizados atualizados
+            "product_name": product.get('name', ''), "product_sku": product.get('sku', ''),
+        }})
     else:
         await db.inventory.insert_one({
             "id": gen_id(), "tenant_id": product['tenant_id'], "product_id": pid, "warehouse_id": warehouse_id,
-            "quantity": quantity, "updated_at": now
+            "quantity": quantity, "updated_at": now,
+            # desnormaliza nome/sku para preservar integridade referencial no estoque
+            "product_name": product.get('name', ''), "product_sku": product.get('sku', ''),
         })
     new_avail = avail - quantity
+    # NAO deletamos mais o produto ao zerar (isso quebrava o join do estoque -> "Desconhecido").
+    # Apenas zeramos available_qty; ele some da aba Produtos pendentes mas continua consultavel.
+    await db.products.update_one({"id": pid}, {"$set": {"available_qty": max(0, new_avail)}})
     if new_avail <= 0:
-        await db.products.delete_one({"id": pid})
-        msg = f"Transferido {quantity} para {wh['name']}. Produto removido da aba."
+        msg = f"Transferido {quantity} para {wh['name']}. Produto enviado ao estoque."
     else:
-        await db.products.update_one({"id": pid}, {"$set": {"available_qty": new_avail}})
         msg = f"Transferido {quantity} para {wh['name']}. Restam {new_avail}."
     await audit.log(user['sub'], user['email'], "TRANSFERIR", "produto", pid, product['tenant_id'],
                     {"deposito": wh['name'], "quantidade": quantity, "setor": sector},

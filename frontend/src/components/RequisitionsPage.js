@@ -6,12 +6,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ArrowLeftRight, Plus, Check, X, Clock, CheckCircle2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { getUser, canCreateRequisition, canApproveRequisition } from '../auth';
 
 const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovada', rejected: 'Rejeitada' };
 const STATUS_COLOR = { pending: 'bg-yellow-100 text-yellow-700', approved: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-700' };
 const STATUS_ICON = { pending: Clock, approved: CheckCircle2, rejected: XCircle };
-
-const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
 
 export const RequisitionsPage = () => {
   const [reqs, setReqs] = useState([]);
@@ -21,9 +20,9 @@ export const RequisitionsPage = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [items, setItems] = useState([{ product_id: '', product_name: '', quantity: 1 }]);
   const [notes, setNotes] = useState('');
-  const me = getCurrentUser();
-  const canCreate = ['operacional', 'gerente_operacional', 'admin'].includes(me.role);
-  const canApprove = ['master', 'admin', 'logistica', 'gerente_logistica', 'gerente_geral'].includes(me.role);
+  const me = getUser() || {};
+  const canCreate = canCreateRequisition();
+  const canApprove = canApproveRequisition();
 
   useEffect(() => { load(); }, []);
 

@@ -72,3 +72,23 @@ export const canViewModules = (user = getUser()) => {
 export const canManageModules = (user = getUser()) => {
   return isAdmin(user);
 };
+
+// Quem pode CRUD produtos/fornecedores/notas (admin, gerentes de logistica/geral, logistica legado)
+export const canManageProducts = (user = getUser()) => {
+  return isAdmin(user) || hasRole(['gerente_geral', 'gerente_logistica', 'logistica'], user);
+};
+
+// Quem pode criar requisicoes (FILHO -> PAI): operacional/gerente_operacional + admin
+export const canCreateRequisition = (user = getUser()) => {
+  return isAdmin(user) || hasRole(['operacional', 'gerente_operacional'], user);
+};
+
+// Quem pode aprovar/rejeitar requisicoes
+export const canApproveRequisition = (user = getUser()) => {
+  return isAdmin(user) || hasRole(['gerente_geral', 'gerente_logistica', 'logistica'], user);
+};
+
+// Quem pode criar transferencias entre lojas (PAI -> PAI)
+export const canManageTransfers = (user = getUser()) => {
+  return isAdmin(user) || hasRole(['gerente_geral'], user);
+};

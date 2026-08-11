@@ -30,11 +30,14 @@ async def list_inventory(user: dict = Depends(get_current_user)):
     for it in items:
         p = pdocs.get(it['product_id'])
         w = wdocs.get(it['warehouse_id'])
+        # Prioridade: doc do produto -> nome desnormalizado no estoque -> 'Desconhecido'
+        product_name = (p['name'] if p else it.get('product_name')) or 'Desconhecido'
+        product_sku = (p['sku'] if p else it.get('product_sku')) or ''
         result.append({
             "id": it['id'], "tenant_id": it.get('tenant_id', ''),
             "product_id": it['product_id'],
-            "product_name": p['name'] if p else 'Desconhecido',
-            "product_sku": p['sku'] if p else '',
+            "product_name": product_name,
+            "product_sku": product_sku,
             "warehouse_id": it['warehouse_id'],
             "warehouse_name": w['name'] if w else 'Desconhecido',
             "warehouse_type": w.get('type', 'pai') if w else 'pai',
@@ -84,9 +87,13 @@ async def adjust_inventory(
     else:
         if data.quantity < 0:
             raise HTTPException(status_code=400, detail="Nao ha estoque para dar baixa")
+        # desnormaliza nome/sku do produto para preservar integridade referencial
+        prod = await db.products.find_one({"id": data.product_id}, {"_id": 0})
         await db.inventory.insert_one({
             "id": gen_id(), "tenant_id": target_tid, "product_id": data.product_id,
-            "warehouse_id": data.warehouse_id, "quantity": max(0, data.quantity), "updated_at": now
+            "warehouse_id": data.warehouse_id, "quantity": max(0, data.quantity), "updated_at": now,
+            "product_name": prod.get('name', '') if prod else '',
+            "product_sku": prod.get('sku', '') if prod else '',
         })
     changes = {"quantidade": data.quantity}
     if data.sector:

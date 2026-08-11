@@ -6,11 +6,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ArrowLeftRight, Plus, ArrowRight, CheckCircle2, X } from 'lucide-react';
 import { toast } from 'sonner';
-
-const getUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
+import { getUser, canManageTransfers } from '../auth';
 
 export const TransfersPage = () => {
-  const me = getUser();
+  const me = getUser() || {};
   const [transfers, setTransfers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [stores, setStores] = useState([]);
@@ -22,7 +21,7 @@ export const TransfersPage = () => {
   const [items, setItems] = useState([{ product_id: '', product_name: '', quantity: 1 }]);
   const [notes, setNotes] = useState('');
 
-  const canCreate = ['master', 'admin', 'gerente_geral'].includes(me.role);
+  const canCreate = canManageTransfers();
 
   const load = async () => {
     try {

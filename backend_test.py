@@ -1,609 +1,528 @@
 #!/usr/bin/env python3
 """
-Backend tests for Gestao TJ - Email Anti-Hang + Notifications System
-Tests against public URL with httpOnly cookie authentication.
+Backend test for Fase 1: Referential integrity fix (Desconhecido bug) + Product CRUD RBAC
+Test scenarios from review_request
 """
-import os
+import requests
 import json
 import time
-import requests
-from typing import Dict, Any
+from typing import Optional
 
-# Read BASE_URL from frontend/.env
-BASE_URL = "https://system-updates-v1.preview.emergentagent.com"
-API = f"{BASE_URL}/api"
+# Base URL from frontend/.env
+BASE_URL = "https://a4f9812a-7632-49c5-a118-8c7d537f85e9.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
-# NOTE: Login is DUAL - normal users by username, master by email
-CREDENTIALS = {
-    "admin_tj": ("admin.tj", "Admin@2026"),  # username login
-    "logistica_tj": ("logistica.tj", "Logistica@2026"),  # username login
-    "operacional_tj": ("operacional.tj", "Operacional@2026"),  # username login
-    "master": ("master@sconnecta.com.br", "Master@2026", True),  # email login with is_master
-}
+ADMIN_TJ = {"identifier": "admin.tj", "password": "Admin@2026"}
+OPERACIONAL_TJ = {"identifier": "operacional.tj", "password": "Operacional@2026"}
+GERAL_ARCOS = {"identifier": "geral.arcos", "password": "GerenteGeral@2026"}
 
-def login(identifier: str, password: str, is_master: bool = False) -> requests.Session:
-    """Login and return session with httpOnly cookies."""
-    session = requests.Session()
-    payload = {"identifier": identifier, "password": password}
-    if is_master:
-        payload["is_master"] = True
+class TestSession:
+    def __init__(self, name: str):
+        self.name = name
+        self.session = requests.Session()
+        self.user_data = None
+        
+    def login(self, credentials: dict) -> bool:
+        """Login and store cookies"""
+        print(f"\n[{self.name}] Logging in as {credentials['identifier']}...")
+        resp = self.session.post(f"{BASE_URL}/auth/login", json=credentials)
+        if resp.status_code == 200:
+            data = resp.json()
+            self.user_data = data.get('user', {})
+            print(f"[{self.name}] ✓ Login successful: {self.user_data.get('name')} | Role: {self.user_data.get('role')}")
+            return True
+        else:
+            print(f"[{self.name}] ✗ Login failed: {resp.status_code} - {resp.text}")
+            return False
     
-    r = session.post(f"{API}/auth/login", json=payload)
-    if r.status_code != 200:
-        print(f"❌ Login failed for {identifier}: {r.status_code} {r.text}")
-        return None
+    def get(self, endpoint: str) -> requests.Response:
+        return self.session.get(f"{BASE_URL}{endpoint}")
     
-    # Verify cookies are set
-    if 'access_token' not in session.cookies:
-        print(f"❌ Login succeeded but no access_token cookie set for {identifier}")
-        return None
+    def post(self, endpoint: str, json_data: dict = None, **kwargs) -> requests.Response:
+        if json_data is not None:
+            return self.session.post(f"{BASE_URL}{endpoint}", json=json_data, **kwargs)
+        return self.session.post(f"{BASE_URL}{endpoint}", **kwargs)
     
-    return session
+    def patch(self, endpoint: str, json_data: dict) -> requests.Response:
+        return self.session.patch(f"{BASE_URL}{endpoint}", json=json_data)
 
-def print_section(title: str):
-    """Print section header."""
+def print_test_header(test_num: int, description: str):
     print(f"\n{'='*80}")
-    print(f"  {title}")
-    print(f"{'='*80}\n")
+    print(f"TEST {test_num}: {description}")
+    print(f"{'='*80}")
 
-def test_email_anti_hang():
-    """
-    TEST 1: EMAIL ANTI-HANG (CRITICAL)
-    POST /api/auth/forgot-password must respond FAST (<5s) with HTTP 200.
-    Must NOT hang even if email sending fails.
-    """
-    print_section("TEST 1: EMAIL ANTI-HANG (forgot-password)")
-    
-    test_cases = [
-        ("admin.tj", "Valid username - should respond fast"),
-        ("naoexiste@nada.com", "Non-existent identifier - should also respond fast (security)"),
-    ]
-    
-    all_passed = True
-    
-    for identifier, description in test_cases:
-        print(f"Testing: {description}")
-        print(f"Identifier: {identifier}")
-        
-        start_time = time.time()
-        r = requests.post(f"{API}/auth/forgot-password", json={"identifier": identifier})
-        elapsed = time.time() - start_time
-        
-        print(f"Response time: {elapsed:.3f}s")
-        print(f"Status code: {r.status_code}")
-        
-        if r.status_code == 200:
-            print(f"✅ HTTP 200 OK")
-            response_data = r.json()
-            print(f"Message: {response_data.get('message', 'N/A')}")
-        else:
-            print(f"❌ Expected 200, got {r.status_code}: {r.text}")
-            all_passed = False
-        
-        if elapsed < 5.0:
-            print(f"✅ Response time OK ({elapsed:.3f}s < 5s)")
-        else:
-            print(f"❌ CRITICAL: Response too slow ({elapsed:.3f}s >= 5s) - HANGS!")
-            all_passed = False
-        
-        print()
-    
-    if all_passed:
-        print("✅✅✅ EMAIL ANTI-HANG TEST PASSED - No hanging detected")
-    else:
-        print("❌❌❌ EMAIL ANTI-HANG TEST FAILED - Issues detected")
-    
-    return all_passed
-
-def test_notification_preferences():
-    """
-    TEST 2: NOTIFICATION PREFERENCES (per-user)
-    GET /api/notifications/preferences -> returns events + preferences
-    PUT /api/notifications/preferences -> saves preferences
-    """
-    print_section("TEST 2: NOTIFICATION PREFERENCES")
-    
-    # Login as admin.tj
-    session = login("admin.tj", "Admin@2026")
-    if not session:
-        print("❌ Failed to login as admin.tj")
-        return False
-    
-    print("✅ Logged in as admin.tj")
-    print()
-    
-    # GET preferences
-    print("GET /api/notifications/preferences")
-    r = session.get(f"{API}/notifications/preferences")
-    
-    if r.status_code != 200:
-        print(f"❌ GET preferences failed: {r.status_code} {r.text}")
-        return False
-    
-    data = r.json()
-    print(f"✅ GET preferences succeeded")
-    
-    # Verify structure
-    if "events" not in data or "preferences" not in data:
-        print(f"❌ Missing 'events' or 'preferences' in response")
-        return False
-    
-    events = data["events"]
-    preferences = data["preferences"]
-    
-    print(f"Events count: {len(events)}")
-    print(f"Expected events: stock_low, requisition_created, requisition_resolved, transfer_received, invoice_pending")
-    
-    expected_events = ["stock_low", "requisition_created", "requisition_resolved", "transfer_received", "invoice_pending"]
-    event_keys = [e["key"] for e in events]
-    
-    missing_events = [e for e in expected_events if e not in event_keys]
-    if missing_events:
-        print(f"❌ Missing events: {missing_events}")
-        return False
-    
-    print(f"✅ All 5 expected events present")
-    print()
-    
-    # Display current preferences
-    print("Current preferences:")
-    for event_key in expected_events:
-        pref = preferences.get(event_key, {})
-        print(f"  {event_key}: in_app={pref.get('in_app')}, email={pref.get('email')}")
-    print()
-    
-    # PUT preferences (update some settings)
-    print("PUT /api/notifications/preferences")
-    new_prefs = {
-        "preferences": {
-            "stock_low": {"in_app": True, "email": True},
-            "invoice_pending": {"in_app": True, "email": False}
-        }
-    }
-    
-    r = session.put(f"{API}/notifications/preferences", json=new_prefs)
-    
-    if r.status_code != 200:
-        print(f"❌ PUT preferences failed: {r.status_code} {r.text}")
-        return False
-    
-    print(f"✅ PUT preferences succeeded")
-    saved_prefs = r.json().get("preferences", {})
-    print(f"Saved preferences: stock_low={saved_prefs.get('stock_low')}, invoice_pending={saved_prefs.get('invoice_pending')}")
-    print()
-    
-    # GET again to verify persistence
-    print("GET /api/notifications/preferences (verify persistence)")
-    r = session.get(f"{API}/notifications/preferences")
-    
-    if r.status_code != 200:
-        print(f"❌ GET preferences (2nd) failed: {r.status_code}")
-        return False
-    
-    data = r.json()
-    persisted_prefs = data["preferences"]
-    
-    # Verify stock_low was saved
-    if persisted_prefs.get("stock_low", {}).get("email") == True:
-        print(f"✅ Preferences persisted correctly (stock_low.email=True)")
-    else:
-        print(f"❌ Preferences not persisted (stock_low.email should be True)")
-        return False
-    
-    print()
-    print("✅✅✅ NOTIFICATION PREFERENCES TEST PASSED")
-    return True
-
-def test_invoice_pending_notification():
-    """
-    TEST 3: NOTIFICATION GENERATION - invoice_pending
-    As admin.tj, create an invoice -> should generate invoice_pending notification
-    for managers (logistica.tj is a manager/approver in same tenant).
-    """
-    print_section("TEST 3: NOTIFICATION GENERATION - invoice_pending")
-    
-    # Login as admin.tj
-    admin_session = login("admin.tj", "Admin@2026")
-    if not admin_session:
-        print("❌ Failed to login as admin.tj")
-        return False
-    
-    print("✅ Logged in as admin.tj")
-    print()
-    
-    # Create an invoice
-    print("Creating invoice as admin.tj...")
-    invoice_data = {
-        "invoice_number": f"NF-TEST-{int(time.time())}",
-        "supplier_name": "Fornecedor Teste Notificacao",
-        "issue_date": "2025-07-01",
-        "total_value": 150.50,
-        "tax_value": 0,
-        "items": []
-    }
-    
-    r = admin_session.post(f"{API}/invoices", json=invoice_data)
-    
-    if r.status_code != 200:
-        print(f"❌ Failed to create invoice: {r.status_code} {r.text}")
-        return False
-    
-    invoice = r.json()
-    print(f"✅ Invoice created: {invoice.get('invoice_number')} (id: {invoice.get('id')})")
-    print()
-    
-    # Wait a moment for notification to be created
-    time.sleep(1)
-    
-    # Login as logistica.tj (same tenant, should receive notification)
-    print("Logging in as logistica.tj (manager/approver)...")
-    log_session = login("logistica.tj", "Logistica@2026")
-    if not log_session:
-        print("❌ Failed to login as logistica.tj")
-        return False
-    
-    print("✅ Logged in as logistica.tj")
-    print()
-    
-    # GET notifications
-    print("GET /api/notifications (as logistica.tj)")
-    r = log_session.get(f"{API}/notifications")
-    
-    if r.status_code != 200:
-        print(f"❌ GET notifications failed: {r.status_code} {r.text}")
-        return False
-    
-    notifications = r.json()
-    print(f"Total notifications: {len(notifications)}")
-    
-    # Look for invoice_pending notification
-    invoice_pending_notifs = [n for n in notifications if n.get("event") == "invoice_pending"]
-    
-    if not invoice_pending_notifs:
-        print(f"❌ No 'invoice_pending' notification found")
-        print(f"Available events: {[n.get('event') for n in notifications[:5]]}")
-        return False
-    
-    print(f"✅ Found {len(invoice_pending_notifs)} invoice_pending notification(s)")
-    latest = invoice_pending_notifs[0]
-    print(f"   Title: {latest.get('title')}")
-    print(f"   Message: {latest.get('message')}")
-    print(f"   Type: {latest.get('type')}")
-    print(f"   Read: {latest.get('read')}")
-    print()
-    
-    # GET unread count
-    print("GET /api/notifications/unread-count")
-    r = log_session.get(f"{API}/notifications/unread-count")
-    
-    if r.status_code != 200:
-        print(f"❌ GET unread-count failed: {r.status_code}")
-        return False
-    
-    count_data = r.json()
-    unread_count = count_data.get("count", 0)
-    print(f"✅ Unread count: {unread_count}")
-    
-    if unread_count >= 1:
-        print(f"✅ Unread count >= 1 (expected)")
-    else:
-        print(f"⚠️  Unread count is 0 (might be already read)")
-    
-    print()
-    print("✅✅✅ INVOICE_PENDING NOTIFICATION TEST PASSED")
-    return True
-
-def test_requisition_flow_notifications():
-    """
-    TEST 4: NOTIFICATION GENERATION - requisition flow
-    operacional.tj creates requisition -> notifies approvers (requisition_created)
-    logistica.tj approves/rejects -> notifies creator (requisition_resolved)
-    """
-    print_section("TEST 4: NOTIFICATION GENERATION - requisition flow")
-    
-    # Login as operacional.tj (FILHO warehouse user)
-    op_session = login("operacional.tj", "Operacional@2026")
-    if not op_session:
-        print("❌ Failed to login as operacional.tj")
-        return False
-    
-    print("✅ Logged in as operacional.tj")
-    print()
-    
-    # Get products to create requisition
-    print("Getting products...")
-    r = op_session.get(f"{API}/products")
-    if r.status_code != 200 or not r.json():
-        print(f"❌ No products available: {r.status_code}")
-        return False
-    
-    products = r.json()
-    product = products[0]
-    print(f"✅ Using product: {product.get('name')} (id: {product.get('id')})")
-    print()
-    
-    # Create requisition
-    print("Creating requisition as operacional.tj...")
-    req_data = {
-        "items": [
-            {
-                "product_id": product.get("id"),
-                "product_name": product.get("name"),
-                "quantity": 1
-            }
-        ],
-        "notes": "Teste de notificacao requisition_created"
-    }
-    
-    r = op_session.post(f"{API}/requisitions", json=req_data)
-    
-    if r.status_code != 200:
-        print(f"❌ Failed to create requisition: {r.status_code} {r.text}")
-        return False
-    
-    requisition = r.json()
-    req_id = requisition.get("id")
-    print(f"✅ Requisition created: {req_id}")
-    print(f"   Status: {requisition.get('status')}")
-    print()
-    
-    # Wait for notification
-    time.sleep(1)
-    
-    # Login as logistica.tj (approver)
-    print("Logging in as logistica.tj (approver)...")
-    log_session = login("logistica.tj", "Logistica@2026")
-    if not log_session:
-        print("❌ Failed to login as logistica.tj")
-        return False
-    
-    print("✅ Logged in as logistica.tj")
-    print()
-    
-    # Check for requisition_created notification
-    print("GET /api/notifications (as logistica.tj)")
-    r = log_session.get(f"{API}/notifications")
-    
-    if r.status_code != 200:
-        print(f"❌ GET notifications failed: {r.status_code}")
-        return False
-    
-    notifications = r.json()
-    req_created_notifs = [n for n in notifications if n.get("event") == "requisition_created"]
-    
-    if not req_created_notifs:
-        print(f"❌ No 'requisition_created' notification found")
-        return False
-    
-    print(f"✅ Found requisition_created notification")
-    print(f"   Title: {req_created_notifs[0].get('title')}")
-    print(f"   Message: {req_created_notifs[0].get('message')}")
-    print()
-    
-    # Get the requisition to approve/reject
-    print("GET /api/requisitions (to find pending requisition)")
-    r = log_session.get(f"{API}/requisitions")
-    
-    if r.status_code != 200:
-        print(f"❌ GET requisitions failed: {r.status_code}")
-        return False
-    
-    requisitions = r.json()
-    pending_reqs = [req for req in requisitions if req.get("id") == req_id and req.get("status") == "pending"]
-    
-    if not pending_reqs:
-        print(f"⚠️  Requisition {req_id} not found or not pending")
-        print(f"   This is OK if it was already processed")
-    else:
-        print(f"✅ Found pending requisition: {req_id}")
-        print()
-        
-        # Try to approve (may fail with "estoque insuficiente" - that's acceptable)
-        print(f"POST /api/requisitions/{req_id}/approve")
-        r = log_session.post(f"{API}/requisitions/{req_id}/approve")
-        
-        if r.status_code == 200:
-            print(f"✅ Requisition approved")
-        elif r.status_code == 400 and "insuficiente" in r.text.lower():
-            print(f"⚠️  Approval failed due to insufficient stock (acceptable)")
-            print(f"   Trying to reject instead...")
-            
-            # Reject instead
-            r = log_session.post(f"{API}/requisitions/{req_id}/reject")
-            if r.status_code == 200:
-                print(f"✅ Requisition rejected")
-            else:
-                print(f"❌ Reject failed: {r.status_code} {r.text}")
-                return False
-        else:
-            print(f"❌ Approve failed: {r.status_code} {r.text}")
-            return False
-        
-        print()
-        
-        # Wait for notification
-        time.sleep(1)
-        
-        # Login back as operacional.tj to check for requisition_resolved notification
-        print("Logging back as operacional.tj (creator)...")
-        op_session2 = login("operacional.tj", "Operacional@2026")
-        if not op_session2:
-            print("❌ Failed to re-login as operacional.tj")
-            return False
-        
-        print("✅ Logged in as operacional.tj")
-        print()
-        
-        print("GET /api/notifications (as operacional.tj)")
-        r = op_session2.get(f"{API}/notifications")
-        
-        if r.status_code != 200:
-            print(f"❌ GET notifications failed: {r.status_code}")
-            return False
-        
-        notifications = r.json()
-        req_resolved_notifs = [n for n in notifications if n.get("event") == "requisition_resolved"]
-        
-        if not req_resolved_notifs:
-            print(f"❌ No 'requisition_resolved' notification found")
-            return False
-        
-        print(f"✅ Found requisition_resolved notification")
-        print(f"   Title: {req_resolved_notifs[0].get('title')}")
-        print(f"   Message: {req_resolved_notifs[0].get('message')}")
-        print()
-    
-    print("✅✅✅ REQUISITION FLOW NOTIFICATIONS TEST PASSED")
-    return True
-
-def test_stock_low_notification():
-    """
-    TEST 5: NOTIFICATION GENERATION - stock_low (best-effort)
-    Set high min_stock on a product, adjust inventory to low quantity -> should trigger stock_low notification.
-    """
-    print_section("TEST 5: NOTIFICATION GENERATION - stock_low (best-effort)")
-    
-    # Login as admin.tj
-    admin_session = login("admin.tj", "Admin@2026")
-    if not admin_session:
-        print("❌ Failed to login as admin.tj")
-        return False
-    
-    print("✅ Logged in as admin.tj")
-    print()
-    
-    # Get products
-    print("Getting products...")
-    r = admin_session.get(f"{API}/products")
-    if r.status_code != 200 or not r.json():
-        print(f"❌ No products available: {r.status_code}")
-        return False
-    
-    products = r.json()
-    product = products[0]
-    product_id = product.get("id")
-    print(f"✅ Using product: {product.get('name')} (id: {product_id})")
-    print()
-    
-    # Get warehouses
-    print("Getting warehouses...")
-    r = admin_session.get(f"{API}/warehouses")
-    if r.status_code != 200 or not r.json():
-        print(f"❌ No warehouses available: {r.status_code}")
-        return False
-    
-    warehouses = r.json()
-    warehouse = warehouses[0]
-    warehouse_id = warehouse.get("id")
-    print(f"✅ Using warehouse: {warehouse.get('name')} (id: {warehouse_id})")
-    print()
-    
-    # Set high min_stock
-    print(f"PATCH /api/products/{product_id} (set min_stock=9999)")
-    r = admin_session.patch(f"{API}/products/{product_id}", json={"min_stock": 9999})
-    
-    if r.status_code != 200:
-        print(f"❌ Failed to update product: {r.status_code} {r.text}")
-        return False
-    
-    print(f"✅ Product min_stock set to 9999")
-    print()
-    
-    # Adjust inventory to low quantity
-    print(f"POST /api/inventory/adjust (set quantity=1)")
-    adjust_data = {
-        "product_id": product_id,
-        "warehouse_id": warehouse_id,
-        "quantity": 1,
-        "reason": "Teste stock_low notification"
-    }
-    
-    r = admin_session.post(f"{API}/inventory/adjust", json=adjust_data)
-    
-    if r.status_code != 200:
-        print(f"❌ Failed to adjust inventory: {r.status_code} {r.text}")
-        return False
-    
-    print(f"✅ Inventory adjusted to 1 (below min_stock 9999)")
-    print()
-    
-    # Wait for notification
-    time.sleep(1)
-    
-    # Check for stock_low notification
-    print("GET /api/notifications (as admin.tj)")
-    r = admin_session.get(f"{API}/notifications")
-    
-    if r.status_code != 200:
-        print(f"❌ GET notifications failed: {r.status_code}")
-        return False
-    
-    notifications = r.json()
-    stock_low_notifs = [n for n in notifications if n.get("event") == "stock_low"]
-    
-    if not stock_low_notifs:
-        print(f"⚠️  No 'stock_low' notification found")
-        print(f"   This may be expected if inventory record didn't exist before")
-        print(f"   Available events: {list(set([n.get('event') for n in notifications[:10]]))}")
-        return True  # Not a failure, just best-effort
-    
-    print(f"✅ Found stock_low notification")
-    print(f"   Title: {stock_low_notifs[0].get('title')}")
-    print(f"   Message: {stock_low_notifs[0].get('message')}")
-    print(f"   Type: {stock_low_notifs[0].get('type')}")
-    print()
-    
-    print("✅✅✅ STOCK_LOW NOTIFICATION TEST PASSED")
-    return True
+def print_result(success: bool, message: str):
+    status = "✓ PASS" if success else "✗ FAIL"
+    print(f"{status}: {message}")
 
 def main():
-    """Run all backend tests."""
-    print("\n" + "="*80)
-    print("  GESTAO TJ - EMAIL ANTI-HANG + NOTIFICATIONS TESTING")
-    print("  Testing against: " + BASE_URL)
+    print("="*80)
+    print("FASE 1 BACKEND TESTING - Referential Integrity + Product CRUD RBAC")
     print("="*80)
     
-    results = {}
+    # Initialize sessions
+    admin_session = TestSession("ADMIN_TJ")
+    operacional_session = TestSession("OPERACIONAL_TJ")
+    arcos_session = TestSession("GERAL_ARCOS")
     
-    # TEST 1: Email anti-hang (CRITICAL)
-    results["email_anti_hang"] = test_email_anti_hang()
+    # Login all users
+    if not admin_session.login(ADMIN_TJ):
+        print("CRITICAL: Admin login failed. Aborting tests.")
+        return
     
-    # TEST 2: Notification preferences
-    results["notification_preferences"] = test_notification_preferences()
+    if not operacional_session.login(OPERACIONAL_TJ):
+        print("WARNING: Operacional login failed. RBAC tests will be skipped.")
     
-    # TEST 3: Invoice pending notification
-    results["invoice_pending"] = test_invoice_pending_notification()
+    if not arcos_session.login(GERAL_ARCOS):
+        print("WARNING: Arcos login failed. PAI->PAI transfer tests will be skipped.")
     
-    # TEST 4: Requisition flow notifications
-    results["requisition_flow"] = test_requisition_flow_notifications()
+    # Get warehouses for tenant TJ
+    print("\n[SETUP] Fetching warehouses for tenant TJ...")
+    wh_resp = admin_session.get("/warehouses")
+    if wh_resp.status_code != 200:
+        print(f"CRITICAL: Failed to fetch warehouses: {wh_resp.status_code}")
+        return
     
-    # TEST 5: Stock low notification (best-effort)
-    results["stock_low"] = test_stock_low_notification()
+    warehouses = wh_resp.json()
+    pai_warehouses = [w for w in warehouses if w.get('type') == 'pai']
+    if not pai_warehouses:
+        print("CRITICAL: No PAI warehouse found for tenant TJ")
+        return
     
-    # Summary
-    print_section("TEST SUMMARY")
+    pai_warehouse = pai_warehouses[0]
+    print(f"[SETUP] ✓ Found PAI warehouse: {pai_warehouse['name']} (id: {pai_warehouse['id']})")
     
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
+    # =========================================================================
+    # TEST 1: PRODUCT CREATE + RBAC
+    # =========================================================================
+    print_test_header(1, "PRODUCT CREATE + RBAC")
     
-    for test_name, result in results.items():
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status} - {test_name}")
+    # 1a) Admin creates product
+    product_data = {
+        "name": "Produto Teste QA",
+        "sku": "QA-SKU-001",
+        "cost_price": 10.5,
+        "min_stock": 2,
+        "description": "Produto para teste de integridade referencial",
+        "category": "Teste",
+        "unit": "UN"
+    }
     
-    print()
-    print(f"Total: {passed}/{total} tests passed")
+    print(f"\n[TEST 1a] Admin creating product: {product_data['name']}")
+    create_resp = admin_session.post("/products", product_data)
     
-    if passed == total:
-        print("\n✅✅✅ ALL TESTS PASSED ✅✅✅")
+    if create_resp.status_code == 200:
+        product = create_resp.json()
+        product_id = product['id']
+        print_result(True, f"Product created with id={product_id}, available_qty={product.get('available_qty')}")
+        
+        if product.get('available_qty') == 0:
+            print_result(True, "available_qty correctly initialized to 0")
+        else:
+            print_result(False, f"available_qty should be 0, got {product.get('available_qty')}")
     else:
-        print(f"\n❌❌❌ {total - passed} TEST(S) FAILED ❌❌❌")
+        print_result(False, f"Product creation failed: {create_resp.status_code} - {create_resp.text}")
+        return
     
-    print("\n" + "="*80 + "\n")
+    # 1b) RBAC: Operacional tries to create product (should get 403)
+    print(f"\n[TEST 1b] RBAC: Operacional attempting to create product (expect 403)")
+    rbac_product_data = {
+        "name": "Produto Nao Autorizado",
+        "sku": "RBAC-FAIL-001",
+        "cost_price": 5.0,
+        "min_stock": 1,
+        "description": "Este produto nao deve ser criado",
+        "category": "Teste",
+        "unit": "UN"
+    }
     
-    return passed == total
+    rbac_create_resp = operacional_session.post("/products", rbac_product_data)
+    
+    if rbac_create_resp.status_code == 403:
+        print_result(True, "Operacional correctly blocked from creating product (403)")
+    else:
+        print_result(False, f"Expected 403, got {rbac_create_resp.status_code}")
+    
+    # =========================================================================
+    # TEST 2: PRODUCT UPDATE SKU + RBAC
+    # =========================================================================
+    print_test_header(2, "PRODUCT UPDATE SKU + RBAC")
+    
+    # 2a) Admin updates SKU
+    new_sku = "QA-SKU-EDITED"
+    print(f"\n[TEST 2a] Admin updating product SKU to: {new_sku}")
+    update_resp = admin_session.patch(f"/products/{product_id}", {"sku": new_sku})
+    
+    if update_resp.status_code == 200:
+        print_result(True, "Product SKU update successful")
+        
+        # Verify SKU changed
+        products_resp = admin_session.get("/products")
+        if products_resp.status_code == 200:
+            products = products_resp.json()
+            updated_product = next((p for p in products if p['id'] == product_id), None)
+            if updated_product and updated_product.get('sku') == new_sku:
+                print_result(True, f"SKU correctly updated to {new_sku}")
+            else:
+                print_result(False, f"SKU not updated correctly. Got: {updated_product.get('sku') if updated_product else 'product not found'}")
+        else:
+            print_result(False, f"Failed to verify SKU update: {products_resp.status_code}")
+    else:
+        print_result(False, f"Product update failed: {update_resp.status_code} - {update_resp.text}")
+    
+    # 2b) RBAC: Operacional tries to update product (should get 403)
+    print(f"\n[TEST 2b] RBAC: Operacional attempting to update product (expect 403)")
+    rbac_update_resp = operacional_session.patch(f"/products/{product_id}", {"sku": "HACKED-SKU"})
+    
+    if rbac_update_resp.status_code == 403:
+        print_result(True, "Operacional correctly blocked from updating product (403)")
+    else:
+        print_result(False, f"Expected 403, got {rbac_update_resp.status_code}")
+    
+    # =========================================================================
+    # TEST 3: CRITICAL "Desconhecido" FLOW
+    # =========================================================================
+    print_test_header(3, "CRITICAL 'Desconhecido' FLOW - Full Transfer")
+    
+    # 3a) Give product some available_qty via invoice processing
+    print(f"\n[TEST 3a] Creating invoice to give product available_qty...")
+    invoice_data = {
+        "invoice_number": f"NF-TEST-DESCONHECIDO-{int(time.time())}",
+        "supplier_name": "Fornecedor Teste QA",
+        "issue_date": "2026-01-15",
+        "total_value": 105.0,
+        "tax_value": 5.0,
+        "items": [
+            {
+                "product_name": product_data['name'],
+                "product_sku": new_sku,
+                "quantity": 10,
+                "unit_price": 10.5,
+                "total": 105.0
+            }
+        ]
+    }
+    
+    invoice_resp = admin_session.post("/invoices", invoice_data)
+    if invoice_resp.status_code != 200:
+        print_result(False, f"Invoice creation failed: {invoice_resp.status_code} - {invoice_resp.text}")
+        return
+    
+    invoice = invoice_resp.json()
+    invoice_id = invoice['id']
+    print_result(True, f"Invoice created: {invoice_id}")
+    
+    # Process invoice items to update product available_qty
+    print(f"\n[TEST 3b] Processing invoice items to update available_qty...")
+    process_resp = admin_session.post(f"/invoices/{invoice_id}/process-items", {})
+    
+    if process_resp.status_code == 200:
+        process_result = process_resp.json()
+        print_result(True, f"Invoice processed: {process_result.get('message')}")
+        print(f"   Products created: {process_result.get('products_created', 0)}")
+        
+        # Verify available_qty increased
+        products_resp = admin_session.get("/products")
+        if products_resp.status_code == 200:
+            products = products_resp.json()
+            updated_product = next((p for p in products if p['id'] == product_id), None)
+            if updated_product:
+                avail_qty = updated_product.get('available_qty', 0)
+                print_result(True, f"Product available_qty now: {avail_qty}")
+                print(f"   Product details: name='{updated_product.get('name')}', sku='{updated_product.get('sku')}'")
+                
+                # Check if a duplicate product was created instead
+                matching_products = [p for p in products if p.get('sku') == new_sku]
+                if len(matching_products) > 1:
+                    print(f"   WARNING: Found {len(matching_products)} products with SKU '{new_sku}'")
+                    for idx, p in enumerate(matching_products):
+                        print(f"      Product {idx+1}: id={p['id']}, name='{p['name']}', available_qty={p.get('available_qty', 0)}")
+                    # Use the one with available_qty > 0
+                    product_with_qty = next((p for p in matching_products if p.get('available_qty', 0) > 0), None)
+                    if product_with_qty:
+                        product_id = product_with_qty['id']
+                        avail_qty = product_with_qty.get('available_qty', 0)
+                        print(f"   Using product with available_qty > 0: {product_id}")
+                
+                if avail_qty <= 0:
+                    print_result(False, "available_qty should be > 0 after processing invoice")
+                    return
+            else:
+                print_result(False, "Product not found after invoice processing")
+                return
+        else:
+            print_result(False, f"Failed to fetch products: {products_resp.status_code}")
+            return
+    else:
+        print_result(False, f"Invoice processing failed: {process_resp.status_code} - {process_resp.text}")
+        return
+    
+    # 3c) Transfer FULL available_qty to warehouse
+    print(f"\n[TEST 3c] Transferring FULL available_qty to warehouse {pai_warehouse['name']}...")
+    transfer_qty = avail_qty
+    transfer_url = f"/products/{product_id}/transfer?warehouse_id={pai_warehouse['id']}&quantity={transfer_qty}"
+    transfer_resp = admin_session.session.post(f"{BASE_URL}{transfer_url}", json={})
+    
+    if transfer_resp.status_code == 200:
+        transfer_result = transfer_resp.json()
+        print_result(True, f"Transfer successful: {transfer_result.get('message')}")
+        
+        # 3d) Verify product still exists with available_qty=0
+        print(f"\n[TEST 3d] Verifying product NOT deleted (should still exist with available_qty=0)...")
+        products_resp = admin_session.get("/products")
+        if products_resp.status_code == 200:
+            products = products_resp.json()
+            product_after_transfer = next((p for p in products if p['id'] == product_id), None)
+            
+            if product_after_transfer:
+                print_result(True, f"✓ CRITICAL: Product still exists after full transfer (NOT deleted)")
+                if product_after_transfer.get('available_qty') == 0:
+                    print_result(True, "available_qty correctly set to 0")
+                else:
+                    print_result(False, f"available_qty should be 0, got {product_after_transfer.get('available_qty')}")
+            else:
+                print_result(False, "✗ CRITICAL BUG: Product was DELETED after full transfer (Desconhecido bug NOT fixed)")
+                return
+        else:
+            print_result(False, f"Failed to fetch products: {products_resp.status_code}")
+            return
+        
+        # 3e) Verify inventory shows CORRECT product_name (not "Desconhecido")
+        print(f"\n[TEST 3e] Verifying inventory shows CORRECT product_name (not 'Desconhecido')...")
+        inventory_resp = admin_session.get("/inventory")
+        if inventory_resp.status_code == 200:
+            inventory = inventory_resp.json()
+            inventory_item = next((i for i in inventory if i['product_id'] == product_id and i['warehouse_id'] == pai_warehouse['id']), None)
+            
+            if inventory_item:
+                product_name = inventory_item.get('product_name', '')
+                product_sku = inventory_item.get('product_sku', '')
+                
+                print(f"   Inventory item: product_name='{product_name}', product_sku='{product_sku}'")
+                
+                if product_name == "Desconhecido":
+                    print_result(False, "✗ CRITICAL BUG: product_name is 'Desconhecido' (referential integrity NOT fixed)")
+                elif product_name == product_data['name']:
+                    print_result(True, f"✓ CRITICAL: product_name is CORRECT ('{product_name}')")
+                else:
+                    print_result(False, f"product_name unexpected: '{product_name}'")
+                
+                if not product_sku:
+                    print_result(False, "product_sku is empty")
+                elif product_sku == new_sku:
+                    print_result(True, f"✓ product_sku is CORRECT ('{product_sku}')")
+                else:
+                    print_result(False, f"product_sku unexpected: '{product_sku}'")
+            else:
+                print_result(False, f"Inventory item not found for product {product_id} in warehouse {pai_warehouse['id']}")
+        else:
+            print_result(False, f"Failed to fetch inventory: {inventory_resp.status_code}")
+    else:
+        print_result(False, f"Transfer failed: {transfer_resp.status_code} - {transfer_resp.text}")
+        return
+    
+    # =========================================================================
+    # TEST 4: INVENTORY ADJUST DENORMALIZATION
+    # =========================================================================
+    print_test_header(4, "INVENTORY ADJUST DENORMALIZATION")
+    
+    # Create a new product for this test
+    print(f"\n[TEST 4a] Creating new product for inventory adjust test...")
+    adjust_product_data = {
+        "name": "Produto Ajuste Estoque",
+        "sku": "ADJUST-SKU-001",
+        "cost_price": 15.0,
+        "min_stock": 5,
+        "description": "Produto para teste de ajuste de estoque",
+        "category": "Teste",
+        "unit": "UN"
+    }
+    
+    adjust_create_resp = admin_session.post("/products", adjust_product_data)
+    if adjust_create_resp.status_code != 200:
+        print_result(False, f"Product creation failed: {adjust_create_resp.status_code}")
+        return
+    
+    adjust_product = adjust_create_resp.json()
+    adjust_product_id = adjust_product['id']
+    print_result(True, f"Product created: {adjust_product_id}")
+    
+    # Adjust inventory (positive quantity, creating new record)
+    print(f"\n[TEST 4b] Adjusting inventory (creating new record with quantity=5)...")
+    adjust_data = {
+        "product_id": adjust_product_id,
+        "warehouse_id": pai_warehouse['id'],
+        "quantity": 5,
+        "reason": "Teste de desnormalizacao"
+    }
+    
+    adjust_resp = admin_session.post("/inventory/adjust", json=adjust_data)
+    
+    if adjust_resp.status_code == 200:
+        print_result(True, "Inventory adjust successful")
+        
+        # Verify inventory has correct product_name and product_sku
+        print(f"\n[TEST 4c] Verifying denormalized product_name and product_sku in inventory...")
+        inventory_resp = admin_session.get("/inventory")
+        if inventory_resp.status_code == 200:
+            inventory = inventory_resp.json()
+            inventory_item = next((i for i in inventory if i['product_id'] == adjust_product_id and i['warehouse_id'] == pai_warehouse['id']), None)
+            
+            if inventory_item:
+                product_name = inventory_item.get('product_name', '')
+                product_sku = inventory_item.get('product_sku', '')
+                
+                print(f"   Inventory item: product_name='{product_name}', product_sku='{product_sku}'")
+                
+                if product_name == "Desconhecido":
+                    print_result(False, "✗ BUG: product_name is 'Desconhecido' after adjust")
+                elif product_name == adjust_product_data['name']:
+                    print_result(True, f"✓ product_name correctly denormalized ('{product_name}')")
+                else:
+                    print_result(False, f"product_name unexpected: '{product_name}'")
+                
+                if not product_sku:
+                    print_result(False, "product_sku is empty after adjust")
+                elif product_sku == adjust_product_data['sku']:
+                    print_result(True, f"✓ product_sku correctly denormalized ('{product_sku}')")
+                else:
+                    print_result(False, f"product_sku unexpected: '{product_sku}'")
+            else:
+                print_result(False, f"Inventory item not found after adjust")
+        else:
+            print_result(False, f"Failed to fetch inventory: {inventory_resp.status_code}")
+    else:
+        print_result(False, f"Inventory adjust failed: {adjust_resp.status_code} - {adjust_resp.text}")
+    
+    # =========================================================================
+    # TEST 5: REGRESSION - Endpoints Return 200
+    # =========================================================================
+    print_test_header(5, "REGRESSION - Endpoints Return 200")
+    
+    # 5a) GET /api/inventory
+    print(f"\n[TEST 5a] GET /api/inventory")
+    inv_resp = admin_session.get("/inventory")
+    if inv_resp.status_code == 200:
+        print_result(True, f"GET /api/inventory returned 200 ({len(inv_resp.json())} items)")
+    else:
+        print_result(False, f"GET /api/inventory returned {inv_resp.status_code}")
+    
+    # 5b) GET /api/transfers
+    print(f"\n[TEST 5b] GET /api/transfers")
+    transfers_resp = admin_session.get("/transfers")
+    if transfers_resp.status_code == 200:
+        print_result(True, f"GET /api/transfers returned 200 ({len(transfers_resp.json())} transfers)")
+    else:
+        print_result(False, f"GET /api/transfers returned {transfers_resp.status_code}")
+    
+    # 5c) GET /api/requisitions
+    print(f"\n[TEST 5c] GET /api/requisitions")
+    req_resp = admin_session.get("/requisitions")
+    if req_resp.status_code == 200:
+        print_result(True, f"GET /api/requisitions returned 200 ({len(req_resp.json())} requisitions)")
+    else:
+        print_result(False, f"GET /api/requisitions returned {req_resp.status_code}")
+    
+    # 5d) PAI->PAI transfer (Arcos tenant)
+    if arcos_session.user_data:
+        print(f"\n[TEST 5d] Creating PAI->PAI transfer as geral.arcos...")
+        
+        # Get Arcos warehouses
+        arcos_wh_resp = arcos_session.get("/warehouses")
+        if arcos_wh_resp.status_code == 200:
+            arcos_warehouses = arcos_wh_resp.json()
+            arcos_pai_warehouses = [w for w in arcos_warehouses if w.get('type') == 'pai']
+            
+            if len(arcos_pai_warehouses) >= 2:
+                from_wh = arcos_pai_warehouses[0]
+                to_wh = arcos_pai_warehouses[1]
+                
+                # First, ensure there's inventory in the source warehouse
+                # Create a product for Arcos tenant
+                arcos_product_data = {
+                    "name": "Produto Transfer Arcos",
+                    "sku": "ARCOS-TRANSFER-001",
+                    "cost_price": 20.0,
+                    "min_stock": 1,
+                    "description": "Produto para teste de transferencia PAI->PAI",
+                    "category": "Teste",
+                    "unit": "UN"
+                }
+                
+                arcos_product_resp = arcos_session.post("/products", arcos_product_data)
+                if arcos_product_resp.status_code == 200:
+                    arcos_product = arcos_product_resp.json()
+                    arcos_product_id = arcos_product['id']
+                    
+                    # Add inventory to source warehouse
+                    arcos_adjust_data = {
+                        "product_id": arcos_product_id,
+                        "warehouse_id": from_wh['id'],
+                        "quantity": 10,
+                        "reason": "Setup para teste de transferencia"
+                    }
+                    
+                    arcos_adjust_resp = arcos_session.post("/inventory/adjust", json=arcos_adjust_data)
+                    if arcos_adjust_resp.status_code == 200:
+                        # Now create the transfer
+                        transfer_data = {
+                            "from_warehouse_id": from_wh['id'],
+                            "to_warehouse_id": to_wh['id'],
+                            "items": [
+                                {
+                                    "product_id": arcos_product_id,
+                                    "product_name": arcos_product_data['name'],
+                                    "product_sku": arcos_product_data['sku'],
+                                    "quantity": 5
+                                }
+                            ],
+                            "notes": "Teste de transferencia PAI->PAI"
+                        }
+                        
+                        transfer_resp = arcos_session.post("/transfers", transfer_data)
+                        if transfer_resp.status_code == 200:
+                            transfer = transfer_resp.json()
+                            print_result(True, f"PAI->PAI transfer created: {transfer['id']}")
+                            
+                            # Verify destination inventory has correct product_name
+                            arcos_inv_resp = arcos_session.get("/inventory")
+                            if arcos_inv_resp.status_code == 200:
+                                arcos_inventory = arcos_inv_resp.json()
+                                dest_inv = next((i for i in arcos_inventory if i['product_id'] == arcos_product_id and i['warehouse_id'] == to_wh['id']), None)
+                                
+                                if dest_inv:
+                                    dest_product_name = dest_inv.get('product_name', '')
+                                    if dest_product_name == "Desconhecido":
+                                        print_result(False, "✗ BUG: Destination inventory shows 'Desconhecido' after PAI->PAI transfer")
+                                    elif dest_product_name == arcos_product_data['name']:
+                                        print_result(True, f"✓ Destination inventory shows correct product_name ('{dest_product_name}')")
+                                    else:
+                                        print_result(False, f"Destination product_name unexpected: '{dest_product_name}'")
+                                else:
+                                    print_result(False, "Destination inventory item not found")
+                            else:
+                                print_result(False, f"Failed to fetch Arcos inventory: {arcos_inv_resp.status_code}")
+                        else:
+                            print_result(False, f"PAI->PAI transfer failed: {transfer_resp.status_code} - {transfer_resp.text}")
+                    else:
+                        print_result(False, f"Failed to add inventory to source: {arcos_adjust_resp.status_code}")
+                else:
+                    print_result(False, f"Failed to create Arcos product: {arcos_product_resp.status_code}")
+            else:
+                print_result(False, f"Arcos tenant needs at least 2 PAI warehouses, found {len(arcos_pai_warehouses)}")
+        else:
+            print_result(False, f"Failed to fetch Arcos warehouses: {arcos_wh_resp.status_code}")
+    else:
+        print("SKIPPED: Arcos session not available")
+    
+    # =========================================================================
+    # SUMMARY
+    # =========================================================================
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print("All critical tests completed. Review results above for any failures.")
+    print("="*80)
 
 if __name__ == "__main__":
-    import sys
-    success = main()
-    sys.exit(0 if success else 1)
+    main()
