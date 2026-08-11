@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any, Optional
 
 # Use the public backend URL from frontend/.env
-BASE_URL = "https://system-updates-v1.preview.emergentagent.com"
+BASE_URL = "https://admin-edit-perms.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
 def print_section(title: str):

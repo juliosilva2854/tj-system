@@ -77,7 +77,7 @@ export const TransfersPage = () => {
         {canCreate && (
           <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
             <DialogTrigger asChild>
-              <Button className="bg-blue-600 hover:bg-blue-700" data-testid="new-transfer-btn"><Plus className="h-4 w-4 mr-1" />Nova transferencia</Button>
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white" data-testid="new-transfer-btn"><Plus className="h-4 w-4 mr-1" />Nova transferencia</Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl">
               <DialogHeader><DialogTitle>Nova transferencia entre lojas</DialogTitle></DialogHeader>
@@ -121,7 +121,7 @@ export const TransfersPage = () => {
                 </div>
 
                 <Input placeholder="Observacoes (opcional)" value={notes} onChange={e => setNotes(e.target.value)} />
-                <Button onClick={submit} className="w-full bg-blue-600 hover:bg-blue-700" data-testid="submit-transfer-btn">Executar transferencia</Button>
+                <Button onClick={submit} className="w-full bg-blue-600 hover:bg-blue-700 text-white" data-testid="submit-transfer-btn">Executar transferencia</Button>
               </div>
             </DialogContent>
           </Dialog>

@@ -65,11 +65,11 @@ async def create_store_for_tenant(tid: str, data: StoreCreate, user: dict = Depe
 @router.get("/stores")
 async def list_stores(user: dict = Depends(get_current_user)):
     q = {}
-    if user['role'] != 'master':
+    if not _is_master(user):
         q['tenant_id'] = user.get('tenant_id', '')
     docs = await db.stores.find(q, {"_id": 0}).to_list(1000)
     # filtrar por escopo se nao for admin/master
-    if user['role'] not in ADMIN_ROLES:
+    if not _is_master(user) and user['role'] not in ADMIN_ROLES:
         scope = await get_user_store_scope(user)
         # gerente_geral: filtra para as lojas que ele tem acesso (se tiver alguma definida)
         # se tiver store_ids definidas, filtra; caso contrario, mostra com base em warehouse_ids

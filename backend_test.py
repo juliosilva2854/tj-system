@@ -8,7 +8,7 @@ import json
 from typing import Optional, Dict, Any
 
 # Base URL from frontend/.env
-BASE_URL = "https://a4f9812a-7632-49c5-a118-8c7d537f85e9.preview.emergentagent.com/api"
+BASE_URL = "https://admin-edit-perms.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 CREDENTIALS = {

@@ -18,7 +18,7 @@ export const StoresPage = () => {
   const [tenants, setTenants] = useState([]);
   const [selectedTenant, setSelectedTenant] = useState('');
 
-  const canManage = canManageStores();
+  const canManage = canManageStores(me);
   const isMasterUser = isMaster(me);
   // Master seleciona o estabelecimento (tenant) ao criar a loja
   const needsTenantPick = isMasterUser;
@@ -34,7 +34,7 @@ export const StoresPage = () => {
 
   // Carrega TODOS os tenants para o Master (necessario para o dropdown e para criar lojas de qualquer estabelecimento)
   useEffect(() => {
-    if (canManage && isMasterUser) {
+    if (isMasterUser) {
       tenantsAPI.getAll()
         .then(r => setTenants(r.data))
         .catch(() => toast.error('Erro ao carregar estabelecimentos'));
@@ -100,7 +100,7 @@ export const StoresPage = () => {
                 <Input placeholder="Nome (ex: Restaurante A)" value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="store-name" />
                 <Input placeholder="Codigo (ex: REST-A)" value={form.code} onChange={e => setForm({...form, code: e.target.value})} data-testid="store-code" />
                 <Input placeholder="Endereco" value={form.address} onChange={e => setForm({...form, address: e.target.value})} data-testid="store-address" />
-                <Button onClick={save} className="w-full bg-blue-600 hover:bg-blue-700" data-testid="save-store-btn">{editing ? 'Salvar' : 'Criar'}</Button>
+                <Button onClick={save} className="w-full bg-blue-600 hover:bg-blue-700 text-white" data-testid="save-store-btn">{editing ? 'Salvar' : 'Criar'}</Button>
               </div>
             </DialogContent>
           </Dialog>
