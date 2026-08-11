@@ -20,7 +20,7 @@ RUN pip install --upgrade pip && \
 
 ### 3. Frontend .env
 ```diff
-- REACT_APP_BACKEND_URL=https://modules-access-1.preview.emergentagent.com
+- REACT_APP_BACKEND_URL=https://system-updates-v1.preview.emergentagent.com
 + REACT_APP_BACKEND_URL=https://api.sconnecta.com.br
 ```
 

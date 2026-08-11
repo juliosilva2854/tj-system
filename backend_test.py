@@ -10,7 +10,7 @@ import requests
 from typing import Dict, Any
 
 # Read BASE_URL from frontend/.env
-BASE_URL = "https://adbf5c6e-d37a-4472-94ed-22cf67a08a2b.preview.emergentagent.com"
+BASE_URL = "https://system-updates-v1.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
 # Test credentials from /app/memory/test_credentials.md

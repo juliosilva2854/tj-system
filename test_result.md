@@ -157,7 +157,7 @@ backend:
           comment: "server.py reduzido para 47 linhas. Endpoints divididos em 18 routers em /app/backend/routers/. Database singleton em /app/backend/database.py. Permissions em /app/backend/permissions.py. Deps em /app/backend/deps.py."
         - working: true
           agent: "testing"
-          comment: "Testado via URL publica (https://modules-access-1.preview.emergentagent.com). Todos os 18 routers funcionando corretamente. Estrutura modular validada."
+          comment: "Testado via URL publica (https://system-updates-v1.preview.emergentagent.com). Todos os 18 routers funcionando corretamente. Estrutura modular validada."
 
   - task: "Novos roles de gerente + multi-warehouse"
     implemented: true
@@ -262,7 +262,7 @@ backend:
           comment: "48 testes pytest passando (32 existentes + 16 novos). Cobertura: stores CRUD, multi-warehouse user, transferencia PAI->PAI, RBAC de gerentes, modulos enable/disable, audit escopado, validacao de modulo invalido."
         - working: true
           agent: "testing"
-          comment: "Executado pytest contra URL publica (https://modules-access-1.preview.emergentagent.com): 48/48 testes passaram em 13.22s. Cobertura completa: auth (8 testes), RBAC (3), isolation (3), warehouses (3), requisitions (7), suppliers/invoices (2), dashboard/reports (3), validation (3), stores/managers (4), transfers (5), modules (5), audit (2). Nenhum erro 5xx ou 403/422 inesperado."
+          comment: "Executado pytest contra URL publica (https://system-updates-v1.preview.emergentagent.com): 48/48 testes passaram em 13.22s. Cobertura completa: auth (8 testes), RBAC (3), isolation (3), warehouses (3), requisitions (7), suppliers/invoices (2), dashboard/reports (3), validation (3), stores/managers (4), transfers (5), modules (5), audit (2). Nenhum erro 5xx ou 403/422 inesperado."
 
 frontend:
   - task: "RBAC ModulesPage - helper centralizado auth.js"
@@ -328,7 +328,7 @@ agent_communication:
       message: |
         ✓✓✓ RBAC MODULES PAGE - TODOS OS TESTES PASSARAM ✓✓✓
         
-        Executados 2 cenários de teste via Playwright no domínio público (https://adbf5c6e-d37a-4472-94ed-22cf67a08a2b.preview.emergentagent.com):
+        Executados 2 cenários de teste via Playwright no domínio público (https://system-updates-v1.preview.emergentagent.com):
         
         ✅ TEST 1 - ADMIN (ALLOWED): admin.tj / Admin@2026
            - Login bem-sucedido, redirecionado para /dashboard
@@ -370,7 +370,7 @@ agent_communication:
     
     - agent: "testing"
       message: |
-        BACKEND REFACTORING VALIDADO COM SUCESSO via URL publica (https://modules-access-1.preview.emergentagent.com).
+        BACKEND REFACTORING VALIDADO COM SUCESSO via URL publica (https://system-updates-v1.preview.emergentagent.com).
         
         PYTEST SUITE: 48/48 testes passaram em 13.22s
         - test_multitenant_saas.py: 32 testes (auth, RBAC, isolation, warehouses, requisitions, suppliers, invoices, dashboard, reports, audit, validation)
@@ -397,7 +397,7 @@ agent_communication:
       message: |
         TESTES ADICIONAIS SOLICITADOS PELO USUARIO - TODOS PASSARAM COM SUCESSO
         
-        Executados 8 cenários de teste específicos via URL publica (https://modules-access-1.preview.emergentagent.com):
+        Executados 8 cenários de teste específicos via URL publica (https://system-updates-v1.preview.emergentagent.com):
         
         ✅ TEST 1: Login com username "admin.tj" + senha "Admin@2026"
            - Retornou access_token e user corretamente
@@ -434,7 +434,7 @@ agent_communication:
       message: |
         ✅✅✅ EMAIL ANTI-HANG + NOTIFICATIONS SYSTEM - ALL TESTS PASSED ✅✅✅
         
-        Executed comprehensive backend testing via public URL (https://adbf5c6e-d37a-4472-94ed-22cf67a08a2b.preview.emergentagent.com):
+        Executed comprehensive backend testing via public URL (https://system-updates-v1.preview.emergentagent.com):
         
         ✅ TEST 1 - EMAIL ANTI-HANG (CRITICAL):
            - POST /api/auth/forgot-password with "admin.tj": 0.128s response time, HTTP 200
